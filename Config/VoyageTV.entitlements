@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  CarPlay Audio 权限：必须由 Apple 审批后，在开发者后台为该 App ID 勾选
+	  "CarPlay Audio" capability，此 key 才会生效。
+	  未获批时：iPhone 端功能完全正常，CarPlay 场景不会被系统唤起。
+	  申请材料见 Docs/CARPLAY-ENTITLEMENT.md
+	-->
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
+	<key>com.apple.developer.playable-content</key>
+	<false/>
+</dict>
+</plist>

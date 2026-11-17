@@ -1,0 +1,22 @@
+# Xcode / macOS 本地产物
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM/
+
+# 生成的工程文件（由 XcodeGen 从 project.yml 生成，不入库避免冲突）
+*.xcodeproj
+*.xcworkspace
+
+# 签名与凭据（绝不入库）
+*.p12
+*.mobileprovision
+*.cer
+*.key
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
