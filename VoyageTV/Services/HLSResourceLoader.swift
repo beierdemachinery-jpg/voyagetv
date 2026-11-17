@@ -20,12 +20,8 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     private let originalURL: URL
     private let headers: [String: String]
     private let session: URLSession
-    private let queue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        queue.name = "VoyageTV.HLSResourceLoader"
-        return queue
-    }()
+    /// AVAssetResourceLoader 的 delegate 队列必须是串行 DispatchQueue。
+    private let queue = DispatchQueue(label: "VoyageTV.HLSResourceLoader")
     private var runningTasks: [URLSessionDataTask] = []
 
     init(originalURL: URL, headers: [String: String]) {
