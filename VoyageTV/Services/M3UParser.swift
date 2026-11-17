@@ -189,8 +189,8 @@ enum M3UParser {
     private static func applyVLCOption(_ option: String, into headers: inout [String: String]) {
         let parts = option.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
         guard parts.count == 2 else { return }
-        let key = parts[0].trimmed.lowercased()
-        let value = parts[1].trimmed
+        let key = String(parts[0]).trimmed.lowercased()
+        let value = String(parts[1]).trimmed
         guard !value.isEmpty else { return }
         switch key {
         case "http-user-agent":
