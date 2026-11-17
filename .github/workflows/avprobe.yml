@@ -1,0 +1,69 @@
+name: AVProbe
+
+# 真机级诊断：在 GitHub 的 macOS 机器上用真实 AVFoundation 播一个地址，
+# 打印 item.status / error / errorLog，用来定位"播不了"的根因。
+# 报告会以 Issue 形式发布（仓库日志需要登录态，Issue 可以匿名读）。
+on:
+  push:
+    paths:
+      - 'Tools/**'
+      - 'VoyageTV/Services/HLSResourceLoader.swift'
+      - '.github/workflows/avprobe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build probe
+        run: |
+          mkdir -p build
+          xcrun swiftc -O VoyageTV/Services/HLSResourceLoader.swift Tools/AVProbe/main.swift -o build/avprobe -framework AVFoundation
+
+      - name: Run probes
+        run: |
+          set +e
+          {
+            echo "### 1) 用户源 + 资源加载器"
+            echo '```'
+            PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
+            echo "### 2) 用户源 + 原生直连"
+            echo '```'
+            PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=direct ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
+            echo "### 3) Apple 官方样例 + 资源加载器（探针自身正确性校验）"
+            echo '```'
+            PROBE_URL="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
+          } > report.md
+          cat report.md
+          echo "REPORT_BYTES=$(wc -c < report.md)"
+
+      - name: Publish report as issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ ! -f report.md ]; then echo "no report"; exit 0; fi
+          jq -n --arg t "AVProbe 报告 #${{ github.run_number }}" --rawfile b report.md '{title:$t, body:$b}' > payload.json
+          curl -sS -X POST -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/issues" \
+            -d @payload.json | head -c 300

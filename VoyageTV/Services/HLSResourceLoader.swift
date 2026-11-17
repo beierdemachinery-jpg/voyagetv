@@ -23,6 +23,8 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     /// AVAssetResourceLoader 的 delegate 队列必须是串行 DispatchQueue。
     private let queue = DispatchQueue(label: "VoyageTV.HLSResourceLoader")
     private var runningTasks: [URLSessionDataTask] = []
+    /// 诊断用：把每次请求的目标地址、响应状态、判定结果打出来（默认关闭）。
+    var onDebug: ((String) -> Void)?
 
     init(originalURL: URL, headers: [String: String]) {
         self.originalURL = originalURL
@@ -69,6 +71,7 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
         guard let target = resolve(loadingRequest.request.url) else { return false }
+        onDebug?("请求 \(target.absoluteString)")
 
         var request = URLRequest(url: target)
         request.timeoutInterval = 20
@@ -99,6 +102,7 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             }
 
             let isPlaylist = Self.looksLikePlaylist(data)
+            onDebug?("响应 \(http.statusCode) type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "-") bytes=\(data.count) playlist=\(isPlaylist)")
 
             if let info = loadingRequest.contentInformationRequest {
                 info.contentType = isPlaylist ? Self.playlistContentType : "video/mp2t"
