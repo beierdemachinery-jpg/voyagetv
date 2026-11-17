@@ -2,6 +2,9 @@ name: iOS Build
 
 # 没有 Mac 也能编译：GitHub 免费提供 macOS 运行器。
 # 注意：macos-14 镜像已于 2026-11-02 下线，必须用 macos-latest / macos-15 / macos-26。
+#
+# 设计要点：每步的报错都会写进 $GITHUB_STEP_SUMMARY，运行摘要页可直接看到
+# 具体的 error 行，不用登录下载日志。
 on:
   push:
     branches: [main]
@@ -19,10 +22,9 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
-          xcode-select -p
 
       - name: List available simulators
-        run: xcrun simctl list devices available | head -40
+        run: xcrun simctl list devices available | head -30
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -33,31 +35,55 @@ jobs:
           ls -la
 
       - name: Run unit tests
-        # 单测失败不阻断出包：先拿到 IPA，测试问题单独修
         continue-on-error: true
         run: |
+          set -o pipefail
           DEVICE=$(xcrun simctl list devices available -j \
             | python3 -c "import sys,json;d=json.load(sys.stdin)['devices'];print(next((x['name'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')),''))")
-          echo "using simulator: $DEVICE"
+          echo "simulator: $DEVICE"
           xcodebuild test \
             -project VoyageTV.xcodeproj \
             -scheme VoyageTV \
             -destination "platform=iOS Simulator,name=$DEVICE" \
             -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            {
+              echo "### 单测失败（不阻断出包）"
+              grep -E "error:|failed" test.log | head -30
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 0
 
       - name: Build for simulator (compile check)
         run: |
+          set -o pipefail
           xcodebuild build \
             -project VoyageTV.xcodeproj \
             -scheme VoyageTV \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            {
+              echo "### 编译失败 · 错误清单"
+              echo '```'
+              grep -E "error:" build.log | head -40
+              echo '```'
+              echo "### 上下文（最后 30 行）"
+              echo '```'
+              tail -30 build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $code
 
       - name: Archive unsigned (.app)
         run: |
+          set -o pipefail
           xcodebuild archive \
             -project VoyageTV.xcodeproj \
             -scheme VoyageTV \
@@ -68,7 +94,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS=""
+            CODE_SIGN_ENTITLEMENTS="" 2>&1 | tee archive.log
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            {
+              echo "### 归档失败"
+              echo '```'
+              grep -E "error:" archive.log | head -30
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $code
 
       - name: Package unsigned IPA
         run: |
@@ -85,10 +121,13 @@ jobs:
           path: build/VoyageTV-unsigned.ipa
           if-no-files-found: warn
 
-      - name: Upload build log on failure
-        if: failure()
+      - name: Upload build logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
-          path: build/DerivedData/Logs
+          path: |
+            build.log
+            test.log
+            archive.log
           if-no-files-found: ignore
