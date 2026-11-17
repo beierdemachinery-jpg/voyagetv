@@ -230,6 +230,17 @@ final class M3UParserTests: XCTestCase {
         XCTAssertFalse(result.contains("EXT-X-REFRESH"))
     }
 
+    /// CRLF 换行的清单：规范化后不能残留 "\r"，否则分片地址尾部带 \r 会被判不可播。
+    func testPlaylistNormalizationStripsCarriageReturns() {
+        let text = "#EXTM3U\r\n#EXT-X-TARGETDURATION:6\r\n#EXTINF:5.000,\r\nhttp://cdn.example.com/a.ts\r\n"
+        let data = text.data(using: .utf8)!
+        let base = URL(string: "http://nas.example.com:1122/ysp.php?id=cctv1")!
+        let out = HLSResourceLoader.rewritePlaylist(data, base: base)!
+        let result = String(data: out, encoding: .utf8)!
+        XCTAssertFalse(result.contains("\r"))
+        XCTAssertTrue(result.contains("http://cdn.example.com/a.ts\n"))
+    }
+
     /// 主清单（含 #EXT-X-STREAM-INF）不能被裁剪，只做地址补全。
     func testMasterPlaylistIsNotStripped() {
         let text = """

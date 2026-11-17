@@ -14,6 +14,10 @@ import Foundation
 final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
     static let customScheme = "voyagetv-hls"
+    /// 代理地址用的固定清单路径：让 AVPlayer 看到 `.m3u8` 后缀，按 HLS 处理，
+    /// 而不是先拿 `Range: bytes=0-1` 去嗅探类型（嗅探路径下实测会判 -11828）。
+    static let proxyPlaylistPath = "/playlist.m3u8"
+    private static let sourceQueryName = "src"
     /// HLS 播放列表的 MIME，AVFoundation 认这个字符串。
     private static let playlistContentType = "application/vnd.apple.mpegurl"
 
@@ -49,9 +53,14 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     /// 造一个挂着自定义 scheme 的 asset，并把 delegate 接上。
+    /// 地址形如 `voyagetv-hls://host:port/playlist.m3u8?src=<原始地址>`。
     static func makeAsset(for url: URL, loader: HLSResourceLoader) -> AVURLAsset {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         components?.scheme = customScheme
+        components?.path = proxyPlaylistPath
+        components?.query = nil
+        components?.fragment = nil
+        components?.queryItems = [URLQueryItem(name: sourceQueryName, value: url.absoluteString)]
         let proxied = components?.url ?? url
         let asset = AVURLAsset(url: proxied)
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
@@ -156,11 +165,17 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     /// 把自定义 scheme 的请求还原成真实的 http(s) 地址。
     private func resolve(_ url: URL?) -> URL? {
         guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // 代理地址里带着原始地址，优先用它
+        if let items = components.queryItems,
+           let source = items.first(where: { $0.name == Self.sourceQueryName })?.value,
+           let original = URL(string: source) {
+            return original
+        }
         components.scheme = originalURL.scheme
         components.host = originalURL.host
         components.port = originalURL.port
         // 相对路径的请求会丢失原始路径，用原始路径兜底
-        if components.path.isEmpty || components.path == "/" {
+        if components.path.isEmpty || components.path == "/" || components.path == Self.proxyPlaylistPath {
             components.path = originalURL.path
         }
         return components.url
@@ -181,11 +196,16 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
     /// 主清单（含 `#EXT-X-STREAM-INF`）保持原样，只做第 2 步。
     static func rewritePlaylist(_ data: Data, base: URL) -> Data? {
         guard let text = String(data: data, encoding: .utf8) else { return data }
-        let isMaster = text.contains("#EXT-X-STREAM-INF")
+        // 源站清单是 CRLF 换行：不先统一掉 "\r"，按 "\n" 切出来的每行尾部都会挂一个 "\r"，
+        // 分片地址就变成 "...ts\r"，AVFoundation 直接判 -11828「媒体格式不支持」。
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let isMaster = normalized.contains("#EXT-X-STREAM-INF")
 
         var lines: [String] = []
-        for raw in text.components(separatedBy: "\n") {
-            var trimmed = raw.trimmingCharacters(in: .whitespaces)
+        for raw in normalized.components(separatedBy: "\n") {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
 
             // 源站常见坏行：把 "#EXT-X-VERSION:3" 写成 "-X-VERSION:3"（少了 #），
@@ -199,7 +219,7 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
             if trimmed.hasPrefix("#") {
                 if isMaster {
-                    lines.append(raw)
+                    lines.append(trimmed)
                     continue
                 }
                 if Self.allowedMediaPlaylistTags.contains(where: { trimmed.hasPrefix($0) }) {
