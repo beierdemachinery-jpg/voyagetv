@@ -110,7 +110,7 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 info.isByteRangeAccessSupported = false
             }
 
-            if isPlaylist, let rewritten = Self.rewriteRelativeURIs(data, base: target) {
+            if isPlaylist, let rewritten = Self.rewritePlaylist(data, base: target) {
                 loadingRequest.dataRequest?.respond(with: rewritten)
             } else {
                 loadingRequest.dataRequest?.respond(with: data)
@@ -151,20 +151,62 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         return head.contains("#EXTM3U") || head.contains("#EXT-X-")
     }
 
-    /// HLS 里的相对地址（分片、子清单）按真实地址补成绝对地址，
-    /// 这样播放器后续直接请求原站，不必每片都绕经我们。
-    private static func rewriteRelativeURIs(_ data: Data, base: URL) -> Data? {
+    /// HLS 播放列表的规范化处理，做两件事：
+    ///
+    /// 1. 只保留标准标签，丢掉国内代理常见的私有/非标准标签
+    ///    （`#EXT-X-REFRESH`、`#EXT-QQHLS-*`、`#EXT-SID`、`#EXT-X-ALLOW-CACHE`、`#EXT-X-PROGRAM-DATE-TIME` 等）。
+    ///    实测这些标签会让 AVFoundation 把整份清单判成不可播（CoreMediaErrorDomain -12642）。
+    /// 2. 把相对地址（分片、子清单）补成绝对地址，后续由播放器直接请求原站。
+    ///
+    /// 主清单（含 `#EXT-X-STREAM-INF`）保持原样，只做第 2 步。
+    static func rewritePlaylist(_ data: Data, base: URL) -> Data? {
         guard let text = String(data: data, encoding: .utf8) else { return data }
+        let isMaster = text.contains("#EXT-X-STREAM-INF")
+
         var lines: [String] = []
         for raw in text.components(separatedBy: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if !line.isEmpty, !line.hasPrefix("#"), let resolved = URL(string: line, relativeTo: base)?.absoluteURL {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+
+            if trimmed.hasPrefix("#") {
+                if isMaster {
+                    lines.append(raw)
+                    continue
+                }
+                if Self.allowedMediaPlaylistTags.contains(where: { trimmed.hasPrefix($0) }) {
+                    lines.append(trimmed)
+                }
+                // 其余标签（含各类私有扩展）直接丢弃
+                continue
+            }
+
+            if let resolved = URL(string: trimmed, relativeTo: base)?.absoluteURL {
                 lines.append(resolved.absoluteString)
             } else {
-                lines.append(raw)
+                lines.append(trimmed)
             }
         }
-        let joined = lines.joined(separator: "\n")
+
+        guard !lines.isEmpty else { return data }
+        let joined = lines.joined(separator: "\n") + "\n"
         return joined.data(using: .utf8)
     }
+
+    /// 媒体清单里允许保留的标准标签（按前缀匹配）。
+    private static let allowedMediaPlaylistTags: [String] = [
+        "#EXTM3U",
+        "#EXT-X-VERSION",
+        "#EXT-X-TARGETDURATION",
+        "#EXT-X-MEDIA-SEQUENCE",
+        "#EXT-X-DISCONTINUITY-SEQUENCE",
+        "#EXT-X-INDEPENDENT-SEGMENTS",
+        "#EXT-X-PLAYLIST-TYPE",
+        "#EXT-X-KEY",
+        "#EXT-X-MAP",
+        "#EXT-X-BYTERANGE",
+        "#EXT-X-DISCONTINUITY",
+        "#EXT-X-GAP",
+        "#EXT-X-ENDLIST",
+        "#EXTINF"
+    ]
 }

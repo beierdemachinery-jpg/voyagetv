@@ -159,4 +159,67 @@ final class M3UParserTests: XCTestCase {
         XCTAssertFalse(HLSResourceLoader.needsLoader(for: URL(string: "https://example.com/live/a.m3u8")!))
         XCTAssertFalse(HLSResourceLoader.needsLoader(for: URL(string: "file:///tmp/a.m3u")!))
     }
+
+    /// 实测源站（ysp.php）的清单带私有标签，AVFoundation 会判成不可播（-12642）；
+    /// 规范化后必须只留下标准标签，同时把相对地址补成绝对。
+    func testPlaylistNormalizationDropsPrivateTags() {
+        let text = """
+        #EXTM3U
+        #EXT-X-REFRESH:21
+        #EXT-X-VERSION:3
+        #EXT-X-ALLOW-CACHE:NO
+        #EXT-X-TARGETDURATION:7
+        #EXT-X-MEDIA-SEQUENCE:1786664719
+        #EXT-QQHLS-MACHINEID:11111
+        #EXT-SID:1786664719
+        #EXT-X-PROGRAM-DATE-TIME:2026-11-17T12:46:12+08:00
+        #EXTINF:5.000,
+        http://hlsliveali-cdn.ysp.cctv.cn/abc/2024078202-1786664719.ts
+        """
+        let data = text.data(using: .utf8)!
+        let base = URL(string: "http://nas.example.com:1122/ysp.php?id=cctv1")!
+        let out = HLSResourceLoader.rewritePlaylist(data, base: base)!
+        let result = String(data: out, encoding: .utf8)!
+
+        XCTAssertTrue(result.hasPrefix("#EXTM3U"))
+        XCTAssertTrue(result.contains("#EXT-X-TARGETDURATION:7"))
+        XCTAssertTrue(result.contains("#EXT-X-MEDIA-SEQUENCE:1786664719"))
+        XCTAssertTrue(result.contains("#EXTINF:5.000,"))
+        XCTAssertTrue(result.contains("http://hlsliveali-cdn.ysp.cctv.cn/abc/2024078202-1786664719.ts"))
+        XCTAssertFalse(result.contains("EXT-X-REFRESH"))
+        XCTAssertFalse(result.contains("EXT-QQHLS"))
+        XCTAssertFalse(result.contains("EXT-SID"))
+        XCTAssertFalse(result.contains("PROGRAM-DATE-TIME"))
+        XCTAssertFalse(result.contains("ALLOW-CACHE"))
+    }
+
+    /// 相对地址的分片要按清单地址补成绝对。
+    func testPlaylistNormalizationResolvesRelativeSegment() {
+        let text = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:6
+        #EXTINF:5.000,
+        seg/1.ts
+        """
+        let data = text.data(using: .utf8)!
+        let base = URL(string: "http://nas.example.com:1122/live/index.m3u8")!
+        let out = HLSResourceLoader.rewritePlaylist(data, base: base)!
+        let result = String(data: out, encoding: .utf8)!
+        XCTAssertTrue(result.contains("http://nas.example.com:1122/live/seg/1.ts"))
+    }
+
+    /// 主清单（含 #EXT-X-STREAM-INF）不能被裁剪，只做地址补全。
+    func testMasterPlaylistIsNotStripped() {
+        let text = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=640x360
+        low/index.m3u8
+        """
+        let data = text.data(using: .utf8)!
+        let base = URL(string: "http://nas.example.com:1122/master.m3u8")!
+        let out = HLSResourceLoader.rewritePlaylist(data, base: base)!
+        let result = String(data: out, encoding: .utf8)!
+        XCTAssertTrue(result.contains("#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=640x360"))
+        XCTAssertTrue(result.contains("http://nas.example.com:1122/low/index.m3u8"))
+    }
 }
