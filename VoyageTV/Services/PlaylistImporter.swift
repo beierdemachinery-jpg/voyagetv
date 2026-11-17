@@ -49,7 +49,7 @@ enum PlaylistImporter {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw ImportError.http(error.localizedDescription)
+            throw ImportError.http(describe(error))
         }
 
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -156,6 +156,34 @@ enum PlaylistImporter {
     }
 
     // MARK: - 内部
+
+    /// 把 URLError 翻译成"看了就知道下一步做什么"的提示：带错误码 + 常见原因。
+    /// 订阅导入失败时，用户最需要区分的是：设备没网 / 服务器没开放端口 / 证书问题。
+    private static func describe(_ error: Error) -> String {
+        guard let urlError = error as? URLError else { return error.localizedDescription }
+        switch urlError.code {
+        case .notConnectedToInternet:
+            return "设备当前没有联网（-1009），请检查 Wi-Fi 或蜂窝数据。"
+        case .cannotConnectToHost:
+            return "连不上服务器：对方主动拒绝连接（-1004）。通常是端口未开放、内网服务没做端口映射，或服务没监听在 0.0.0.0。可先用浏览器打开同一地址验证。"
+        case .cannotFindHost, .dnsLookupFailed:
+            return "域名解析失败（\(urlError.code.rawValue)），请检查地址拼写或 DNS。"
+        case .timedOut:
+            return "请求超时（-1001）：服务器无响应，或被网络设备/运营商拦截。"
+        case .networkConnectionLost:
+            return "连接被中断（-1005），可能是服务端主动断开或网络切换。"
+        case .secureConnectionFailed, .serverCertificateUntrusted,
+             .serverCertificateHasBadDate, .serverCertificateNotYetValid,
+             .serverCertificateHasUnknownRoot:
+            return "HTTPS 证书校验失败（\(urlError.code.rawValue)）。若源站是自签名证书，请改用 http:// 或换成正规证书。"
+        case .appTransportSecurityRequiresSecureConnection:
+            return "系统拦下了明文 HTTP 请求（-1022），这是配置问题，请反馈给开发者。"
+        case .badURL, .unsupportedURL:
+            return "地址格式不被支持（\(urlError.code.rawValue)），请确认它以 http:// 或 https:// 开头。"
+        default:
+            return "\(urlError.localizedDescription)（错误码 \(urlError.code.rawValue)）"
+        }
+    }
 
     private static func importText(
         _ text: String,
