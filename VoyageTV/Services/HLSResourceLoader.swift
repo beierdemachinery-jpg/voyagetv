@@ -205,7 +205,7 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         var lines: [String] = []
         for raw in normalized.components(separatedBy: "\n") {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty { continue }
 
             // 源站常见坏行：把 "#EXT-X-VERSION:3" 写成 "-X-VERSION:3"（少了 #），
