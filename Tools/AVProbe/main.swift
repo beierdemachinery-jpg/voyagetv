@@ -41,6 +41,7 @@ let statusObservation = item.observe(\.status, options: [.initial, .new]) { item
     case .readyToPlay:
         if !readyLogged {
             readyLogged = true
+            print("asset.isPlayable=\(asset.isPlayable) isReadable=\(asset.isReadable)")
             print("item.duration=\(item.duration.seconds) tracks=\(asset.tracks.map { $0.mediaType.rawValue })")
             player.play()
         }
@@ -51,6 +52,7 @@ let statusObservation = item.observe(\.status, options: [.initial, .new]) { item
             print("item.error.userInfo=\(error.userInfo)")
         }
         print("errorLog=\(String(describing: item.errorLog()))")
+        print("asset.isPlayable=\(asset.isPlayable) isReadable=\(asset.isReadable)")
         exit(2)
     default:
         break

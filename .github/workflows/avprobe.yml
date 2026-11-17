@@ -1,7 +1,8 @@
 name: AVProbe
 
 # 真机级诊断：在 GitHub 的 macOS 机器上用真实 AVFoundation 播一个地址，
-# 打印 item.status / error / errorLog，用来定位"播不了"的根因。
+# 打印 item.status / error / errorLog，并保留 CFNETWORK 的 HTTP 交互诊断，
+# 用来定位"播不了"的根因。
 # 报告会以 Issue 形式发布（仓库日志需要登录态，Issue 可以匿名读）。
 on:
   push:
@@ -22,37 +23,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: Reachability from runner
         run: |
-          xcodebuild -version
-          swift --version
+          set +e
+          {
+            echo "### 0) 从 runner 直接抓源（排除地域/网络因素）"
+            echo '```'
+            curl -sS -m 20 -o /tmp/pl.txt -w "playlist http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total}\n" "http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1"
+            SEG=$(grep -Eo 'http://.*\.ts' /tmp/pl.txt | head -1)
+            echo "segment=${SEG:0:80}..."
+            curl -sS -m 30 -r 0-99 -o /dev/null -w "segment(0-99) http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total} range=%{starttransfer_time}\n" "$SEG"
+            curl -sS -m 30 -o /dev/null -w "segment(full) http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total}\n" "$SEG"
+            echo '```'
+          } > report.md
+          cat report.md
 
       - name: Build probe
         run: |
           mkdir -p build
           xcrun swiftc -O VoyageTV/Services/HLSResourceLoader.swift Tools/AVProbe/main.swift -o build/avprobe -framework AVFoundation
 
-      - name: Run probes
+      - name: Probe with CFNETWORK diagnostics
         run: |
           set +e
           {
-            echo "### 1) 用户源 + 资源加载器"
+            echo "### 1) 用户源 + 资源加载器（CFNETWORK_DIAGNOSTICS=3）"
             echo '```'
-            PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader ./build/avprobe 2>&1
+            CFNETWORK_DIAGNOSTICS=3 PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader \
+              ./build/avprobe 2> /tmp/diag.log
             echo "exit=$?"
+            echo '```'
+            echo "### 1b) 诊断日志关键片段"
+            echo '```'
+            grep -Ei 'segment|\.ts|error|fail|status|content-type|host|geo|timeout|403|404' /tmp/diag.log | tail -n 120
             echo '```'
             echo "### 2) 用户源 + 原生直连"
             echo '```'
-            PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=direct ./build/avprobe 2>&1
+            CFNETWORK_DIAGNOSTICS=3 PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=direct \
+              ./build/avprobe 2> /tmp/diag2.log
             echo "exit=$?"
             echo '```'
-            echo "### 3) Apple 官方样例 + 资源加载器（探针自身正确性校验）"
+            echo "### 2b) 诊断日志关键片段"
             echo '```'
-            PROBE_URL="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8" PROBE_MODE=loader ./build/avprobe 2>&1
-            echo "exit=$?"
+            grep -Ei 'segment|\.ts|error|fail|status|content-type|host|geo|timeout|403|404' /tmp/diag2.log | tail -n 120
             echo '```'
-          } > report.md
-          cat report.md
+          } >> report.md
           echo "REPORT_BYTES=$(wc -c < report.md)"
 
       - name: Publish report as issue
