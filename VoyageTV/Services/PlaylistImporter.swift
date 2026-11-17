@@ -208,7 +208,13 @@ enum PlaylistImporter {
         }
 
         guard !channels.isEmpty else { throw ImportError.noChannels }
-        return store.upsert(name: name, source: source, channels: channels, kind: kind)
+        return store.upsert(
+            name: name,
+            source: source,
+            channels: channels,
+            kind: kind,
+            epgURL: parsed.epgURL?.absoluteString
+        )
     }
 
     private static func displayName(for url: URL) -> String {

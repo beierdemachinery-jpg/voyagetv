@@ -88,17 +88,26 @@ final class PlaylistStore: ObservableObject {
         source: String,
         channels: [Channel],
         kind: Playlist.Kind = .m3uURL,
-        credentials: XtreamCredentials? = nil
+        credentials: XtreamCredentials? = nil,
+        epgURL: String? = nil
     ) -> Int {
         if let index = playlists.firstIndex(where: { $0.source == source }) {
             playlists[index].name = name
             playlists[index].kind = kind
             playlists[index].credentials = credentials
+            if let epgURL { playlists[index].epgURL = epgURL }
             playlists[index].channels = channels
             playlists[index].importedAt = Date()
         } else {
             playlists.append(
-                Playlist(name: name, source: source, kind: kind, credentials: credentials, channels: channels)
+                Playlist(
+                    name: name,
+                    source: source,
+                    kind: kind,
+                    credentials: credentials,
+                    epgURL: epgURL,
+                    channels: channels
+                )
             )
         }
         persist()

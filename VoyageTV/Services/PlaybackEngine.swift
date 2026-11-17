@@ -32,6 +32,8 @@ final class PlaybackEngine: NSObject, ObservableObject {
     private var failureObserver: NSObjectProtocol?
     private var forceAudioOnly: Bool
     private var artworkTask: Task<Void, Never>?
+    /// 挂着"识别纠正"的 HLS 源时要持有 loader（AVAsset 只弱引用 delegate）。
+    private var hlsLoader: HLSResourceLoader?
 
     private static let forceAudioOnlyKey = "settings.forceAudioOnly"
 
@@ -67,7 +69,20 @@ final class PlaybackEngine: NSObject, ObservableObject {
         let options: [String: Any] = channel.httpHeaders.isEmpty
             ? [:]
             : ["AVURLAssetHTTPHeaderFieldsKey": channel.httpHeaders]
-        let asset = AVURLAsset(url: channel.streamURL, options: options)
+
+        let asset: AVURLAsset
+        if HLSResourceLoader.needsLoader(for: channel.streamURL) {
+            // 无 .m3u8 后缀 / Content-Type 不对的 HLS 源：交给资源加载器纠正
+            hlsLoader?.stop()
+            let loader = HLSResourceLoader(originalURL: channel.streamURL, headers: channel.httpHeaders)
+            hlsLoader = loader
+            asset = HLSResourceLoader.makeAsset(for: channel.streamURL, loader: loader)
+        } else {
+            hlsLoader?.stop()
+            hlsLoader = nil
+            asset = AVURLAsset(url: channel.streamURL, options: options)
+        }
+
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 5
         observe(item: item)
@@ -108,6 +123,8 @@ final class PlaybackEngine: NSObject, ObservableObject {
         isBuffering = false
         errorMessage = nil
         artworkTask?.cancel()
+        hlsLoader?.stop()
+        hlsLoader = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 

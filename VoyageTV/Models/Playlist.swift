@@ -34,6 +34,8 @@ struct Playlist: Identifiable, Codable, Hashable {
     var kind: Kind
     /// 仅 Xtream 源需要，刷新时用它重新登录。
     var credentials: XtreamCredentials?
+    /// 订阅头 `x-tvg-url` / `url-tvg` 里声明的 XMLTV 节目单地址（可为空）。
+    var epgURL: String?
     var channels: [Channel]
 
     init(
@@ -43,6 +45,7 @@ struct Playlist: Identifiable, Codable, Hashable {
         importedAt: Date = Date(),
         kind: Kind = .m3uURL,
         credentials: XtreamCredentials? = nil,
+        epgURL: String? = nil,
         channels: [Channel]
     ) {
         self.id = id
@@ -51,6 +54,7 @@ struct Playlist: Identifiable, Codable, Hashable {
         self.importedAt = importedAt
         self.kind = kind
         self.credentials = credentials
+        self.epgURL = epgURL
         self.channels = channels
     }
 
@@ -71,7 +75,7 @@ struct Playlist: Identifiable, Codable, Hashable {
     // MARK: - Codable（对旧数据宽容：缺字段时给默认值）
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, source, importedAt, kind, credentials, channels
+        case id, name, source, importedAt, kind, credentials, epgURL, channels
     }
 
     init(from decoder: Decoder) throws {
@@ -82,6 +86,7 @@ struct Playlist: Identifiable, Codable, Hashable {
         importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt) ?? Date()
         kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .m3uURL
         credentials = try container.decodeIfPresent(XtreamCredentials.self, forKey: .credentials)
+        epgURL = try container.decodeIfPresent(String.self, forKey: .epgURL)
         channels = try container.decodeIfPresent([Channel].self, forKey: .channels) ?? []
     }
 
@@ -93,6 +98,7 @@ struct Playlist: Identifiable, Codable, Hashable {
         try container.encode(importedAt, forKey: .importedAt)
         try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(credentials, forKey: .credentials)
+        try container.encodeIfPresent(epgURL, forKey: .epgURL)
         try container.encode(channels, forKey: .channels)
     }
 }

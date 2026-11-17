@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 /// 添加订阅：M3U 链接 / Xtream Codes / 粘贴文本 / 本地文件。
 struct AddPlaylistView: View {
     @EnvironmentObject private var playlists: PlaylistStore
+    @EnvironmentObject private var epg: EPGStore
     @Environment(\.dismiss) private var dismiss
 
     enum Mode: String, CaseIterable, Identifiable {
@@ -216,6 +217,7 @@ struct AddPlaylistView: View {
                     name: name.trimmed.isEmpty ? nil : name.trimmed,
                     into: playlists
                 )
+                await epg.adoptSourceFromPlaylists(playlists)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -240,6 +242,7 @@ struct AddPlaylistView: View {
                     name: name,
                     into: playlists
                 )
+                await epg.adoptSourceFromPlaylists(playlists)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -253,6 +256,8 @@ struct AddPlaylistView: View {
         defer { isWorking = false }
         do {
             try PlaylistImporter.importFromText(pastedText, into: playlists)
+            let store = playlists
+            Task { await epg.adoptSourceFromPlaylists(store) }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
@@ -266,6 +271,8 @@ struct AddPlaylistView: View {
             guard let url = urls.first else { return }
             do {
                 try PlaylistImporter.importFromFile(url, into: playlists)
+                let store = playlists
+                Task { await epg.adoptSourceFromPlaylists(store) }
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

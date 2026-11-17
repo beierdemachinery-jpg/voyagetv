@@ -18,6 +18,8 @@ enum M3UParser {
         var warnings: [String] = []
         /// 输入看起来是 HLS 媒体清单（#EXT-X-*），而不是频道表。
         var isHLSMediaPlaylist = false
+        /// `#EXTM3U x-tvg-url="..."` / `url-tvg="..."` 里带的节目单地址。
+        var epgURL: URL?
     }
 
     static func parse(_ text: String, baseURL: URL? = nil) -> Output {
@@ -43,6 +45,11 @@ enum M3UParser {
                 let attributes = parseAttributes(line)
                 if let userAgent = attributes["http-user-agent"], !userAgent.isEmpty {
                     defaultHeaders["User-Agent"] = userAgent
+                }
+                // 订阅头里可能同时声明多个节目单地址（逗号分隔），取第一个可用的。
+                if let rawEPG = attributes["x-tvg-url"] ?? attributes["url-tvg"], !rawEPG.isEmpty {
+                    let first = (rawEPG.components(separatedBy: ",").first ?? rawEPG).trimmed
+                    if !first.isEmpty { output.epgURL = resolveURL(first, base: baseURL) }
                 }
                 continue
             }

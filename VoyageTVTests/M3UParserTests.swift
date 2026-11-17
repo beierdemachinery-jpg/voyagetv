@@ -126,4 +126,37 @@ final class M3UParserTests: XCTestCase {
         XCTAssertEqual(attributes["group-title"], "Kids & Family")
         XCTAssertEqual(attributes["tvg-chno"], "12")
     }
+
+    /// 订阅头里带 x-tvg-url（真实源站：nas.vipgoodmedical.com）时，节目单地址要被采集到。
+    func testReadsEPGURLFromHeader() {
+        let text = """
+        #EXTM3U x-tvg-url="https://epg.catvod.com/epg.xml"
+        #EXTINF:-1 tvg-name="CCTV1" group-title="未分组",CCTV1
+        http://nas.example.com:1122/ysp.php?id=cctv1
+        """
+        let output = M3UParser.parse(text, baseURL: base)
+        XCTAssertEqual(output.epgURL?.absoluteString, "https://epg.catvod.com/epg.xml")
+        XCTAssertEqual(output.channels.count, 1)
+        // 没有 .m3u8 后缀的转发接口也要原样保留
+        XCTAssertEqual(output.channels[0].streamURL.absoluteString, "http://nas.example.com:1122/ysp.php?id=cctv1")
+    }
+
+    /// 多个节目单地址（逗号分隔）时取第一个。
+    func testReadsFirstOfMultipleEPGURLs() {
+        let text = """
+        #EXTM3U url-tvg="https://a.example.com/1.xml,https://b.example.com/2.xml"
+        #EXTINF:-1,频道
+        https://example.com/a.m3u8
+        """
+        let output = M3UParser.parse(text, baseURL: base)
+        XCTAssertEqual(output.epgURL?.absoluteString, "https://a.example.com/1.xml")
+    }
+
+    /// 无后缀 / 非 .m3u8 的 http 地址要走资源加载器（修 Content-Type），
+    /// 正常 .m3u8 与本地文件不走，避免无谓绕行。
+    func testOnlyNonM3U8RemoteURLsNeedResourceLoader() {
+        XCTAssertTrue(HLSResourceLoader.needsLoader(for: URL(string: "http://nas.example.com:1122/ysp.php?id=cctv1")!))
+        XCTAssertFalse(HLSResourceLoader.needsLoader(for: URL(string: "https://example.com/live/a.m3u8")!))
+        XCTAssertFalse(HLSResourceLoader.needsLoader(for: URL(string: "file:///tmp/a.m3u")!))
+    }
 }

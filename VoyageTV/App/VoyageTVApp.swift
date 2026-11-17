@@ -12,6 +12,7 @@ struct VoyageTVApp: App {
                 .environmentObject(AppContainer.shared.player)
                 .environmentObject(AppContainer.shared.carPlaySession)
                 .task {
+                    await AppContainer.shared.epg.adoptSourceFromPlaylists(AppContainer.shared.playlists)
                     await AppContainer.shared.epg.refreshIfNeeded()
                 }
         }

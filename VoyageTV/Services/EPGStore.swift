@@ -122,6 +122,17 @@ final class EPGStore: ObservableObject {
         try? await refresh()
     }
 
+    /// 订阅头里带了 `x-tvg-url` 时，把它当成默认节目单源。
+    /// 只在用户还没手动设置过节目单时才自动套用，避免覆盖手动配置。
+    func adoptSourceFromPlaylists(_ store: PlaylistStore) async {
+        guard !hasSource, !isRefreshing else { return }
+        let candidates = store.playlists
+            .compactMap { $0.epgURL?.trimmed }
+            .filter { !$0.isEmpty }
+        guard let candidate = candidates.first else { return }
+        try? await setSource(candidate)
+    }
+
     func clear() {
         programs = [:]
         displayNames = [:]
