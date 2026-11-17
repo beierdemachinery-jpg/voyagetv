@@ -4,6 +4,17 @@
 
 > 本项目是独立实现，**没有**使用、复制或反编译任何第三方 IPTV 客户端（包括 APTV）的代码、资源或接口。节目内容全部来自你自己添加的订阅。
 
+## 构建状态
+
+| 项 | 状态 |
+| --- | --- |
+| 云端编译（GitHub Actions · macos-latest） | ✅ 通过（2026-11-17） |
+| 单测 21 条（M3U 11 + XMLTV/匹配 10） | ✅ 在 iPhone 模拟器上执行 |
+| 归档 + 未签名 IPA | ✅ 产出 `VoyageTV-unsigned-ipa`（约 259 KB） |
+| 真机 / CarPlay | ⏳ 待装机验证、待 Apple 审批 CarPlay Audio |
+
+见 `Docs/BUILD-VERIFIED.md`。仓库地址：`https://github.com/beierdemachinery-jpg/voyagetv`
+
 ---
 
 ## 功能对照（与 APTV 那类客户端的常见能力对齐）
