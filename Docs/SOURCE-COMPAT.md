@@ -101,3 +101,17 @@ http://hlsliveali-cdn.ysp.cctv.cn/<长串 hash>/2024078202-1786664719.ts
 - 裸 MPEG-TS 广播流（`http://.../x.ts` 直接返回 TS，不是 HLS 清单）：AVPlayer 不支持，需要 VLCKit/FFmpeg；
 - 需要 DRM / 播放密钥的源；
 - 需要 cookie 登录态且清单里未声明 `#EXTVLCOPT:http-cookie` 的源（可在 App 内手工补 header 的功能尚未实现）。
+
+## 6. `ysp.php?id=cctvN` 这类源的三道坎（已解决，2026-11-17 实测打通）
+
+这类 PHP 代理不返回 `.m3u8` 地址，Content-Type 是 `text/html`，清单里还混着私有标签。实测逐个踩到三个不同的错误码，按顺序修完才播得出来：
+
+| 现象 | 错误码 | 根因 | 处理 |
+| --- | --- | --- | --- |
+| 直连清单 | `CoreMediaErrorDomain -12642` | 清单里 `#EXT-X-REFRESH` / `#EXT-QQHLS-*` / `#EXT-SID` / `#EXT-X-ALLOW-CACHE` / `#EXT-X-PROGRAM-DATE-TIME` 等非标准标签 | 自定义资源加载器重写清单，只留标准标签 |
+| 加载器 + 原始清单 | 仍 `-12642` | 源站把 `#EXT-X-VERSION:3` 写成 `-X-VERSION:3`（少一个 `#`），被当相对地址拼进清单 | 补回 `#EXT`，并丢弃带冒号的非 URL 坏行 |
+| 加载器（修好标签后） | `AVFoundationErrorDomain -11828`「媒体格式不支持」 | 代理地址没有 `.m3u8` 后缀，AVPlayer 先用 `Range: bytes=0-1` 嗅探类型，嗅探路径下判死 | 代理地址统一成 `voyagetv-hls://host/playlist.m3u8?src=<原始地址>` |
+
+验证方式：`Tools/AVProbe` 在 macOS runner 上用真实 AVFoundation 跑同一份代码，判据是 `AVPlayerItem.status == .readyToPlay` 且连续播放超过 3 秒。最新一次（AVProbe 报告 #9）用户源那一组 `asset.isPlayable=true`、`played` 到 3.0009 秒，`RESULT: PLAYING`。
+
+调试要诀：`HLSResourceLoader.onDebug` 打开后，请求日志里的 `range=` 很关键——`range=bytes=0-1` 出现就说明 AVPlayer 在嗅探类型，此时必然是清单地址形态不对，而不是源站内容有问题。
