@@ -86,6 +86,16 @@ jobs:
             PROBE_URL="http://127.0.0.1:8899/clean.m3u8" PROBE_MODE=direct ./build/avprobe 2>&1
             echo "exit=$?"
             echo '```'
+            echo "### E) 干净清单 + 资源加载器（自定义 scheme 能不能服务媒体清单）"
+            echo '```'
+            PROBE_URL="http://127.0.0.1:8899/clean.m3u8" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
+            echo "### F) 原始清单 + 资源加载器"
+            echo '```'
+            PROBE_URL="http://127.0.0.1:8899/original.m3u8" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
             echo "### C) 用户源 + 资源加载器（远端原样）"
             echo '```'
             PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader ./build/avprobe 2>&1
