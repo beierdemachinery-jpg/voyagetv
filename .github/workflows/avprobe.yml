@@ -1,8 +1,7 @@
 name: AVProbe
 
-# 真机级诊断：在 GitHub 的 macOS 机器上用真实 AVFoundation 播一个地址，
-# 打印 item.status / error / errorLog，并保留 CFNETWORK 的 HTTP 交互诊断，
-# 用来定位"播不了"的根因。
+# 真机级诊断：在 GitHub 的 macOS 机器上用真实 AVFoundation 播同一个源的不同变体，
+# 用二分法定位"播放列表里到底哪一部分让 AVFoundation 判定不可播"。
 # 报告会以 Issue 形式发布（仓库日志需要登录态，Issue 可以匿名读）。
 on:
   push:
@@ -19,55 +18,89 @@ permissions:
 jobs:
   probe:
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - name: Reachability from runner
-        run: |
-          set +e
-          {
-            echo "### 0) 从 runner 直接抓源（排除地域/网络因素）"
-            echo '```'
-            curl -sS -m 20 -o /tmp/pl.txt -w "playlist http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total}\n" "http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1"
-            SEG=$(grep -Eo 'http://.*\.ts' /tmp/pl.txt | head -1)
-            echo "segment=${SEG:0:80}..."
-            curl -sS -m 30 -r 0-99 -o /dev/null -w "segment(0-99) http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total} range=%{starttransfer_time}\n" "$SEG"
-            curl -sS -m 30 -o /dev/null -w "segment(full) http=%{http_code} type=%{content_type} size=%{size_download} time=%{time_total}\n" "$SEG"
-            echo '```'
-          } > report.md
-          cat report.md
 
       - name: Build probe
         run: |
           mkdir -p build
           xcrun swiftc -O VoyageTV/Services/HLSResourceLoader.swift Tools/AVProbe/main.swift -o build/avprobe -framework AVFoundation
 
-      - name: Probe with CFNETWORK diagnostics
+      - name: Prepare variants
+        run: |
+          set -e
+          mkdir -p /tmp/serve
+          curl -sS -m 20 -o /tmp/orig.m3u8 "http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1"
+          echo "orig_bytes=$(wc -c < /tmp/orig.m3u8)"
+          echo "=== original content ==="
+          cat /tmp/orig.m3u8
+          cp /tmp/orig.m3u8 /tmp/serve/original.m3u8
+
+          python3 - <<'PY'
+          src = open('/tmp/orig.m3u8').read().splitlines()
+          segs = [l for l in src if l.startswith('http')]
+          durs = [l for l in src if l.startswith('#EXTINF')]
+          media_seq = next((l for l in src if l.startswith('#EXT-X-MEDIA-SEQUENCE')), '#EXT-X-MEDIA-SEQUENCE:1000')
+          out = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:7', media_seq]
+          for i, d in enumerate(durs):
+              if i < len(segs):
+                  out.append(d)
+                  out.append(segs[i])
+          open('/tmp/serve/clean.m3u8', 'w').write("\n".join(out) + "\n")
+          print("=== clean variant ===")
+          print("\n".join(out))
+          PY
+
+          ls -l /tmp/serve
+
+      - name: Start local server
+        run: |
+          cat > /tmp/server.py <<'PY'
+          import http.server, functools
+          class H(http.server.SimpleHTTPRequestHandler):
+              def guess_type(self, path):
+                  if path.endswith('.m3u8'):
+                      return 'application/vnd.apple.mpegurl'
+                  return super().guess_type(path)
+              def log_message(self, fmt, *args):
+                  print("HTTP " + (fmt % args), flush=True)
+          http.server.ThreadingHTTPServer(('127.0.0.1', 8899), functools.partial(H, directory='/tmp/serve')).serve_forever()
+          PY
+          nohup python3 /tmp/server.py > /tmp/server.log 2>&1 &
+          sleep 2
+          curl -sS -o /dev/null -w "local original http=%{http_code} type=%{content_type}\n" "http://127.0.0.1:8899/original.m3u8"
+          curl -sS -o /dev/null -w "local clean http=%{http_code} type=%{content_type}\n" "http://127.0.0.1:8899/clean.m3u8"
+
+      - name: Run probes
         run: |
           set +e
           {
-            echo "### 1) 用户源 + 资源加载器（CFNETWORK_DIAGNOSTICS=3）"
+            echo "### A) 原始清单，正确 MIME，本地直连"
             echo '```'
-            CFNETWORK_DIAGNOSTICS=3 PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader \
-              ./build/avprobe 2> /tmp/diag.log
+            PROBE_URL="http://127.0.0.1:8899/original.m3u8" PROBE_MODE=direct ./build/avprobe 2>&1
             echo "exit=$?"
             echo '```'
-            echo "### 1b) 诊断日志关键片段"
+            echo "### B) 洗掉私有标签后的清单，本地直连"
             echo '```'
-            grep -Ei 'segment|\.ts|error|fail|status|content-type|host|geo|timeout|403|404' /tmp/diag.log | tail -n 120
-            echo '```'
-            echo "### 2) 用户源 + 原生直连"
-            echo '```'
-            CFNETWORK_DIAGNOSTICS=3 PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=direct \
-              ./build/avprobe 2> /tmp/diag2.log
+            PROBE_URL="http://127.0.0.1:8899/clean.m3u8" PROBE_MODE=direct ./build/avprobe 2>&1
             echo "exit=$?"
             echo '```'
-            echo "### 2b) 诊断日志关键片段"
+            echo "### C) 用户源 + 资源加载器（远端原样）"
             echo '```'
-            grep -Ei 'segment|\.ts|error|fail|status|content-type|host|geo|timeout|403|404' /tmp/diag2.log | tail -n 120
+            PROBE_URL="http://nas.vipgoodmedical.com:1122/ysp.php?id=cctv1" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
             echo '```'
-          } >> report.md
+            echo "### D) Apple 官方样例（探针自检）"
+            echo '```'
+            PROBE_URL="https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_16x9/bipbop_16x9_variant.m3u8" PROBE_MODE=loader ./build/avprobe 2>&1
+            echo "exit=$?"
+            echo '```'
+            echo "### 本地服务器访问日志"
+            echo '```'
+            tail -n 60 /tmp/server.log
+            echo '```'
+          } > report.md
           echo "REPORT_BYTES=$(wc -c < report.md)"
 
       - name: Publish report as issue
