@@ -208,6 +208,28 @@ final class M3UParserTests: XCTestCase {
         XCTAssertTrue(result.contains("http://nas.example.com:1122/live/seg/1.ts"))
     }
 
+    /// 源站把 `#EXT-X-VERSION:3` 写成了 `-X-VERSION:3`（缺 #）：
+    /// 要补回成合法标签，且绝不能把它拼成一条相对地址混进清单。
+    func testPlaylistNormalizationRepairsMissingHash() {
+        let text = """
+        #EXTM3U
+        #EXT-X-REFRESH:21
+        -X-VERSION:3
+        #EXT-X-TARGETDURATION:7
+        #EXTINF:5.000,
+        http://cdn.example.com/a.ts
+        """
+        let data = text.data(using: .utf8)!
+        let base = URL(string: "http://nas.example.com:1122/ysp.php?id=cctv1")!
+        let out = HLSResourceLoader.rewritePlaylist(data, base: base)!
+        let result = String(data: out, encoding: .utf8)!
+
+        XCTAssertTrue(result.contains("#EXT-X-VERSION:3"))
+        XCTAssertFalse(result.contains("-X-VERSION:3\n"))
+        XCTAssertFalse(result.contains("ysp.php?id=cctv1/-X-VERSION"))
+        XCTAssertFalse(result.contains("EXT-X-REFRESH"))
+    }
+
     /// 主清单（含 #EXT-X-STREAM-INF）不能被裁剪，只做地址补全。
     func testMasterPlaylistIsNotStripped() {
         let text = """

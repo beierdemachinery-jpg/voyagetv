@@ -165,8 +165,17 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
 
         var lines: [String] = []
         for raw in text.components(separatedBy: "\n") {
-            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            var trimmed = raw.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
+
+            // 源站常见坏行：把 "#EXT-X-VERSION:3" 写成 "-X-VERSION:3"（少了 #），
+            // 直接当地址会被拼成不存在的 URL，导致整份清单被判不可播。这里补回去。
+            if trimmed.hasPrefix("-"), !trimmed.hasPrefix("//") {
+                let repaired = "#EXT" + trimmed
+                if Self.allowedMediaPlaylistTags.contains(where: { repaired.hasPrefix($0) }) {
+                    trimmed = repaired
+                }
+            }
 
             if trimmed.hasPrefix("#") {
                 if isMaster {
@@ -180,10 +189,14 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
                 continue
             }
 
-            if let resolved = URL(string: trimmed, relativeTo: base)?.absoluteURL {
+            if let absolute = URL(string: trimmed), let scheme = absolute.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" {
+                lines.append(absolute.absoluteString)
+            } else if trimmed.contains(":") {
+                // 带冒号但又不是合法 URL 的坏行，丢掉而不是拼成相对地址
+                continue
+            } else if let resolved = URL(string: trimmed, relativeTo: base)?.absoluteURL {
                 lines.append(resolved.absoluteString)
-            } else {
-                lines.append(trimmed)
             }
         }
 
