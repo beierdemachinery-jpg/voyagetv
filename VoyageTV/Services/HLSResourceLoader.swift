@@ -71,7 +71,8 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
         guard let target = resolve(loadingRequest.request.url) else { return false }
-        onDebug?("请求 \(target.absoluteString)")
+        let range = loadingRequest.request.value(forHTTPHeaderField: "Range") ?? "-"
+        onDebug?("请求 \(target.absoluteString) range=\(range)")
 
         var request = URLRequest(url: target)
         request.timeoutInterval = 20
@@ -104,16 +105,35 @@ final class HLSResourceLoader: NSObject, AVAssetResourceLoaderDelegate {
             let isPlaylist = Self.looksLikePlaylist(data)
             onDebug?("响应 \(http.statusCode) type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "-") bytes=\(data.count) playlist=\(isPlaylist)")
 
-            if let info = loadingRequest.contentInformationRequest {
-                info.contentType = isPlaylist ? Self.playlistContentType : "video/mp2t"
-                info.contentLength = Int64(data.count)
-                info.isByteRangeAccessSupported = false
+            var payload = data
+            if isPlaylist, let rewritten = Self.rewritePlaylist(data, base: target) {
+                payload = rewritten
+                let head = String(data: rewritten.prefix(120), encoding: .utf8) ?? "-"
+                onDebug?("规范化后 bytes=\(rewritten.count) head=\(head.replacingOccurrences(of: "\n", with: "⏎"))")
             }
 
-            if isPlaylist, let rewritten = Self.rewritePlaylist(data, base: target) {
-                loadingRequest.dataRequest?.respond(with: rewritten)
-            } else {
-                loadingRequest.dataRequest?.respond(with: data)
+            if let info = loadingRequest.contentInformationRequest {
+                info.contentType = isPlaylist ? Self.playlistContentType : "video/mp2t"
+                info.contentLength = Int64(payload.count)
+                info.isByteRangeAccessSupported = true
+            }
+
+            if let dataRequest = loadingRequest.dataRequest {
+                let offset = Int(dataRequest.requestedOffset)
+                let requestedLength = Int(dataRequest.requestedLength)
+                onDebug?("dataRequest offset=\(offset) length=\(requestedLength)")
+                if offset > 0 || requestedLength > 0 {
+                    // 播放器要的是某一段字节时按范围回，别把整份塞给它
+                    let start = min(max(offset, 0), payload.count)
+                    let end = requestedLength > 0
+                        ? min(payload.count, start + requestedLength)
+                        : payload.count
+                    if start < end {
+                        dataRequest.respond(with: payload.subdata(in: start..<end))
+                    }
+                } else {
+                    dataRequest.respond(with: payload)
+                }
             }
             loadingRequest.finishLoading()
         }
