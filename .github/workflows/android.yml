@@ -32,7 +32,7 @@ jobs:
           set -o pipefail
           curl -sSLo /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
           unzip -q /tmp/gradle.zip -d /tmp
-          /tmp/gradle-8.7/bin/gradle --no-daemon --stacktrace assembleDebug
+          /tmp/gradle-8.7/bin/gradle --no-daemon --stacktrace assembleDebug 2>&1 | tee /tmp/build.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -46,7 +46,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          tail -c 6000 /tmp/build.log > /tmp/tail.log || echo "no build log" > /tmp/tail.log
+          {
+            echo "运行页：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            cat /tmp/tail.log
+            echo '```'
+          } > /tmp/body.md
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "Android 编译失败 #${{ github.run_number }}" \
-            --body "运行页：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+            --body-file /tmp/body.md || true
