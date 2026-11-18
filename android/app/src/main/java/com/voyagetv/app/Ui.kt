@@ -1,5 +1,10 @@
 package com.voyagetv.app
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -21,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -43,6 +51,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -52,14 +62,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.voyagetv.app.data.Channel
+import kotlinx.coroutines.delay
 
 private val Accent = Color(0xFF4CC2FF)
 private val Bg = Color(0xFF070B12)
@@ -410,6 +425,53 @@ private fun ChannelRow(
 @Composable
 private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     val channel = state.current ?: return
+    val activity = LocalContext.current.findActivity()
+    var fullscreen by remember { mutableStateOf(false) }
+    var chromeVisible by remember { mutableStateOf(true) }
+
+    fun applyFullscreen(on: Boolean) {
+        fullscreen = on
+        chromeVisible = true
+        val act = activity ?: return
+        val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
+        if (on) {
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            WindowCompat.setDecorFitsSystemWindows(act.window, false)
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            WindowCompat.setDecorFitsSystemWindows(act.window, true)
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    // 离开播放页时把屏幕方向和系统栏恢复回去，否则列表页会停留在横屏全屏
+    DisposableEffect(Unit) {
+        onDispose {
+            val act = activity
+            if (act != null) {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                WindowCompat.setDecorFitsSystemWindows(act.window, true)
+                WindowCompat.getInsetsController(act.window, act.window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    // 全屏时控件 4 秒后自动隐藏，点屏幕再唤出
+    LaunchedEffect(fullscreen, chromeVisible) {
+        if (fullscreen && chromeVisible) {
+            delay(4000)
+            chromeVisible = false
+        }
+    }
+
+    BackHandler(enabled = fullscreen) { applyFullscreen(false) }
+    BackHandler(enabled = !fullscreen) { vm.closePlayer() }
+
+    val showChrome = !fullscreen || chromeVisible
 
     Box(
         modifier = Modifier
@@ -429,37 +491,51 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             update = { it.player = vm.player() }
         )
 
-        Row(
+        // 全屏时点屏幕唤出/收起控件。PlayerView 没挂 controller 时不处理点击，所以这里单独铺一层
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { vm.closePlayer() },
-                modifier = Modifier.background(Color(0x33FFFFFF), CircleShape)
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    if (fullscreen) chromeVisible = !chromeVisible
+                }
+        )
+
+        if (showChrome) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
-            }
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = channel.name,
-                color = Color.White,
-                fontSize = 15.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-            Spacer(Modifier.weight(1f))
-            IconButton(
-                onClick = { vm.toggleFavorite(channel) },
-                modifier = Modifier.background(Color(0x33FFFFFF), CircleShape)
-            ) {
-                Icon(
-                    imageVector = if (channel.id in state.favorites) Icons.Rounded.Star else Icons.Rounded.StarBorder,
-                    contentDescription = "收藏",
-                    tint = Color.White
+                IconButton(
+                    onClick = { vm.closePlayer() },
+                    modifier = Modifier.background(Color(0x33FFFFFF), CircleShape)
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = channel.name,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 )
+                Spacer(Modifier.weight(1f))
+                IconButton(
+                    onClick = { vm.toggleFavorite(channel) },
+                    modifier = Modifier.background(Color(0x33FFFFFF), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = if (channel.id in state.favorites) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                        contentDescription = "收藏",
+                        tint = Color.White
+                    )
+                }
             }
         }
 
@@ -469,69 +545,92 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            state.playerError?.let { message ->
-                Box(
-                    modifier = Modifier
-                        .background(Danger.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
-                ) {
-                    Text(message, color = Color(0xFFFFD5D6), fontSize = 13.sp)
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-
-            state.nextProgramme?.let { next ->
-                Text("接下来", color = Color(0x99FFFFFF), fontSize = 12.sp)
-                Text(next, color = Color(0xE6FFFFFF), fontSize = 14.sp)
-                Spacer(Modifier.height(10.dp))
-            } ?: state.currentProgramme?.let { current ->
-                Text(current, color = Color(0xE6FFFFFF), fontSize = 14.sp)
-                Spacer(Modifier.height(10.dp))
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+        if (showChrome) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                IconButton(onClick = { vm.playPrevious() }, modifier = Modifier.size(56.dp)) {
-                    Icon(
-                        Icons.Rounded.SkipPrevious,
-                        contentDescription = "上一台",
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
-                    )
+                state.playerError?.let { message ->
+                    Box(
+                        modifier = Modifier
+                            .background(Danger.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(message, color = Color(0xFFFFD5D6), fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
                 }
-                Spacer(Modifier.width(16.dp))
-                IconButton(
-                    onClick = { vm.togglePlayPause() },
-                    modifier = Modifier
-                        .size(64.dp)
-                        .background(Color(0x33FFFFFF), CircleShape)
+
+                state.nextProgramme?.let { next ->
+                    Text("接下来", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                    Text(next, color = Color(0xE6FFFFFF), fontSize = 14.sp)
+                    Spacer(Modifier.height(10.dp))
+                } ?: state.currentProgramme?.let { current ->
+                    Text(current, color = Color(0xE6FFFFFF), fontSize = 14.sp)
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (state.isPlaying) "暂停" else "播放",
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
-                    )
-                }
-                Spacer(Modifier.width(16.dp))
-                IconButton(onClick = { vm.playNext() }, modifier = Modifier.size(56.dp)) {
-                    Icon(
-                        Icons.Rounded.SkipNext,
-                        contentDescription = "下一台",
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
-                    )
+                    IconButton(onClick = { vm.playPrevious() }, modifier = Modifier.size(56.dp)) {
+                        Icon(
+                            Icons.Rounded.SkipPrevious,
+                            contentDescription = "上一台",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    IconButton(
+                        onClick = { vm.togglePlayPause() },
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(Color(0x33FFFFFF), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            contentDescription = if (state.isPlaying) "暂停" else "播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    IconButton(onClick = { vm.playNext() }, modifier = Modifier.size(56.dp)) {
+                        Icon(
+                            Icons.Rounded.SkipNext,
+                            contentDescription = "下一台",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    IconButton(
+                        onClick = { applyFullscreen(!fullscreen) },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                            contentDescription = if (fullscreen) "退出全屏" else "全屏",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+private fun Context.findActivity(): Activity? {
+    var context: Context = this
+    while (context is ContextWrapper) {
+        if (context is Activity) return context
+        context = context.baseContext
+    }
+    return null
 }
