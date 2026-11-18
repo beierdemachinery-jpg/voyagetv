@@ -27,7 +27,8 @@ object Xtream {
         val result = ArrayList<LiveStream>(array.length())
         for (index in 0 until array.length()) {
             val obj = array.optJSONObject(index) ?: continue
-            val id = obj.optString("stream_id").ifBlank { continue }
+            val id = obj.optString("stream_id")
+            if (id.isBlank()) continue
             result.add(
                 LiveStream(
                     id = id,
