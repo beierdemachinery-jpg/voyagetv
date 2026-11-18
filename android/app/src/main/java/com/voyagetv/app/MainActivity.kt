@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 
+import android.view.KeyEvent
+
 class MainActivity : ComponentActivity() {
 
     private val vm: AppViewModel by viewModels()
@@ -22,6 +24,31 @@ class MainActivity : ComponentActivity() {
                 AppRoot(vm)
             }
         }
+    }
+
+    /**
+     * 电视遥控器：正在播放时，上键 = 上一台、下键 = 下一台。
+     *
+     * 放在 dispatchKeyEvent 里，比放在页面里的 onKeyEvent 更早期，不会被 Compose 的焦点移动先吃掉。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (vm.uiState.value.current != null &&
+            event.action == KeyEvent.ACTION_DOWN &&
+            event.repeatCount == 0
+        ) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    vm.playPrevious()
+                    return true
+                }
+
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    vm.playNext()
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /** Android 13 起通知要授权，媒体会话的通知栏才会显示；不给也能播，只是没有通知。 */

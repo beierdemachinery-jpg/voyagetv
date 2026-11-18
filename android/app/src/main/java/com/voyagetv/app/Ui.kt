@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +23,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,6 +63,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -275,6 +280,21 @@ private fun ImportScreen(
 private fun ChannelsScreen(vm: AppViewModel, state: UiState, onImport: () -> Unit) {
     val visible = vm.visibleChannels()
     val groups = vm.groups()
+    val context = LocalContext.current
+    val isTv = remember(context) {
+        runCatching {
+            context.findActivity()?.packageManager?.hasSystemFeature(PackageManager.FEATURE_LEANBACK) == true
+        }.getOrDefault(false)
+    }
+    val firstFocus = remember { FocusRequester() }
+
+    // 电视上先用遥控器把焦点落在第一个频道，否则上下键不知道从哪开始
+    LaunchedEffect(isTv, visible.size) {
+        if (isTv && visible.isNotEmpty()) {
+            delay(300)
+            runCatching { firstFocus.requestFocus() }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -351,11 +371,13 @@ private fun ChannelsScreen(vm: AppViewModel, state: UiState, onImport: () -> Uni
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
-            items(visible, key = { it.id }) { channel ->
+            itemsIndexed(visible, key = { _, channel -> channel.id }) { index, channel ->
                 ChannelRow(
                     channel = channel,
                     favourite = channel.id in state.favorites,
                     subtitle = vm.programmeLine(channel),
+                    isTv = isTv,
+                    modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
                     onClick = { vm.play(channel) },
                     onToggleFavourite = { vm.toggleFavorite(channel) }
                 )
@@ -369,26 +391,31 @@ private fun ChannelRow(
     channel: Channel,
     favourite: Boolean,
     subtitle: String?,
+    isTv: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onToggleFavourite: () -> Unit
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .background(if (focused) Color(0xFF16263A) else Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = if (isTv) 16.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(40.dp)
+                .size(if (isTv) 48.dp else 40.dp)
                 .background(CardBg, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = channel.name.take(1).uppercase(),
                 color = Accent,
-                fontSize = 16.sp,
+                fontSize = if (isTv) 18.sp else 16.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -397,14 +424,14 @@ private fun ChannelRow(
             Text(
                 text = channel.name,
                 color = Color(0xFFE8EEF9),
-                fontSize = 16.sp,
+                fontSize = if (isTv) 18.sp else 16.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle ?: channel.displayGroup,
                 color = Color(0xFF8A93A6),
-                fontSize = 12.sp,
+                fontSize = if (isTv) 14.sp else 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -426,6 +453,10 @@ private fun ChannelRow(
 private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     val channel = state.current ?: return
     val activity = LocalContext.current.findActivity()
+    val isTv = remember(activity) {
+        runCatching { activity?.packageManager?.hasSystemFeature(PackageManager.FEATURE_LEANBACK) == true }
+            .getOrDefault(false)
+    }
     var fullscreen by remember { mutableStateOf(false) }
     var chromeVisible by remember { mutableStateOf(true) }
 
@@ -435,7 +466,10 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         val act = activity ?: return
         val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
         if (on) {
-            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            // 电视本来就是横屏，别去改方向
+            if (!isTv) {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
             WindowCompat.setDecorFitsSystemWindows(act.window, false)
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior =
@@ -460,9 +494,9 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         }
     }
 
-    // 全屏时控件 4 秒后自动隐藏，点屏幕再唤出
-    LaunchedEffect(fullscreen, chromeVisible) {
-        if (fullscreen && chromeVisible) {
+    // 全屏时控件 4 秒后自动隐藏，点屏幕再唤出（电视上不自动隐藏，遥控器需要看得见按钮）
+    LaunchedEffect(fullscreen, chromeVisible, isTv) {
+        if (fullscreen && chromeVisible && !isTv) {
             delay(4000)
             chromeVisible = false
         }
@@ -517,14 +551,23 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                     Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
                 }
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = channel.name,
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = channel.name,
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                    if (isTv) {
+                        Text(
+                            text = "遥控器 ↑↓ 换台 · OK 暂停/继续",
+                            color = Color(0x99FFFFFF),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
                 Spacer(Modifier.weight(1f))
                 IconButton(
                     onClick = { vm.toggleFavorite(channel) },
