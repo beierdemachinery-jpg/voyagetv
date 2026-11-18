@@ -5,13 +5,17 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,26 +31,44 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Crop
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.DateRange
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.LiveTv
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -54,6 +76,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -76,6 +99,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,10 +111,15 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.voyagetv.app.data.AppSettings
 import com.voyagetv.app.data.Channel
+import com.voyagetv.app.data.Playlist
+import com.voyagetv.app.data.formatBytes
 import kotlinx.coroutines.delay
+import java.net.Inet4Address
+import java.net.Inet6Address
 
-// APTV 的配色：纯黑背景、内容面板深灰、白色主文字、红色强调、绿色「直播」标记
+// APTV 的配色：纯黑背景、深灰面板、白色主文字、红色强调、绿色直播标记
 private val Bg = Color(0xFF000000)
 private val Panel = Color(0xFF111113)
 private val PanelAlt = Color(0xFF1C1C1F)
@@ -99,6 +128,7 @@ private val TextDim = Color(0xFF8E8E93)
 private val Accent = Color(0xFFE5484D)
 private val LiveDot = Color(0xFF31D07C)
 private val Danger = Color(0xFFFF5A5F)
+private val Divider = Color(0xFF232326)
 
 @Composable
 fun VoyageTheme(content: @Composable () -> Unit) {
@@ -119,14 +149,15 @@ fun VoyageTheme(content: @Composable () -> Unit) {
 @Composable
 fun AppRoot(vm: AppViewModel) {
     val state by vm.uiState.collectAsState()
-    var tab by remember { mutableIntStateOf(0) }
+    val settings by vm.settings.collectAsState()
+    var tab by remember { mutableIntStateOf(settings.defaultTab) }
 
     LaunchedEffect(state.playlists.isEmpty()) {
         if (state.playlists.isEmpty()) tab = 2
     }
 
     if (state.current != null) {
-        PlayerScreen(vm, state)
+        PlayerScreen(vm, state, settings)
         return
     }
 
@@ -137,9 +168,10 @@ fun AppRoot(vm: AppViewModel) {
     ) {
         Box(Modifier.weight(1f)) {
             when (tab) {
-                1 -> ChannelListScreen(vm, state, favoritesOnly = true)
+                1 -> ChannelScreen(vm, state, settings, favoritesOnly = true, onOpenConfig = { tab = 2 })
                 2 -> ConfigScreen(vm, state, onDone = { tab = 0 })
-                else -> ChannelListScreen(vm, state, favoritesOnly = false)
+                3 -> SettingsScreen(vm, settings, state)
+                else -> ChannelScreen(vm, state, settings, favoritesOnly = false, onOpenConfig = { tab = 2 })
             }
         }
         BottomBar(tab) { tab = it }
@@ -152,44 +184,51 @@ private fun BottomBar(tab: Int, onSelect: (Int) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .background(Bg)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(
             modifier = Modifier
                 .background(PanelAlt, RoundedCornerShape(26.dp))
-                .padding(horizontal = 6.dp, vertical = 6.dp),
+                .padding(horizontal = 4.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             BarItem("频道", Icons.Rounded.LiveTv, tab == 0) { onSelect(0) }
             BarItem("收藏", Icons.Rounded.Favorite, tab == 1) { onSelect(1) }
             BarItem("配置", Icons.Rounded.Settings, tab == 2) { onSelect(2) }
+            BarItem("设置", Icons.Rounded.Category, tab == 3) { onSelect(3) }
         }
     }
 }
 
 @Composable
-private fun BarItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
+private fun BarItem(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
     val tint = if (selected) Accent else TextDim
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(if (selected) Color(0xFF0B0B0C) else Color.Transparent)
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 14.dp, vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
         Text(label, color = tint, fontSize = 11.sp)
     }
 }
 
-// MARK: - 频道网格
+// MARK: - 频道页
 
 @Composable
-private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: Boolean) {
+private fun ChannelScreen(
+    vm: AppViewModel,
+    state: UiState,
+    settings: AppSettings,
+    favoritesOnly: Boolean,
+    onOpenConfig: () -> Unit
+) {
     val context = LocalContext.current
     val isTv = remember(context) {
         runCatching {
@@ -197,15 +236,18 @@ private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: B
         }.getOrDefault(false)
     }
     val firstFocus = remember { FocusRequester() }
+    var menu by remember { mutableStateOf(false) }
+    var picker by remember { mutableStateOf(false) }
 
     val source = if (favoritesOnly) {
         state.channels.filter { it.id in state.favorites }
     } else {
         vm.visibleChannels()
     }
-    val visible = if (state.query.isBlank()) source else source.filter {
+    val filtered = if (state.query.isBlank()) source else source.filter {
         it.name.contains(state.query.trim(), ignoreCase = true)
     }
+    val visible = if (settings.channelOrder == "name") filtered.sortedBy { it.name } else filtered
 
     LaunchedEffect(isTv, favoritesOnly, visible.size) {
         if (isTv && visible.isNotEmpty()) {
@@ -214,58 +256,106 @@ private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: B
         }
     }
 
+    val activePlaylist = state.playlists.firstOrNull { it.id == state.selectedPlaylistId }
+
     Column(Modifier.fillMaxSize()) {
+        // 顶部工具条：全部频道下拉 + 播放 / 配置 / 更多
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 18.dp, end = 6.dp, top = 14.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = if (favoritesOnly) {
-                        "我的收藏"
-                    } else {
-                        state.playlists.firstOrNull()?.name ?: "IPTV"
-                    },
-                    color = TextMain,
-                    fontSize = if (isTv) 30.sp else 26.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (favoritesOnly) {
-                        "${state.favorites.size} 个收藏"
-                    } else {
-                        "共 ${state.channels.size} 个频道"
-                    },
-                    color = TextDim,
-                    fontSize = 11.sp
-                )
+            Box {
+                Pill(
+                    icon = Icons.Rounded.List,
+                    text = activePlaylist?.name ?: "全部频道"
+                ) { picker = true }
+                DropdownMenu(expanded = picker, onDismissRequest = { picker = false }) {
+                    DropdownMenuItem(
+                        text = { Text("全部频道") },
+                        onClick = {
+                            vm.selectPlaylist("")
+                            picker = false
+                        }
+                    )
+                    state.playlists.forEach { playlist ->
+                        DropdownMenuItem(
+                            text = { Text(playlist.name) },
+                            onClick = {
+                                vm.selectPlaylist(playlist.id)
+                                picker = false
+                            }
+                        )
+                    }
+                }
             }
-            IconButton(onClick = { vm.refresh() }) {
-                Icon(Icons.Rounded.Refresh, contentDescription = "刷新", tint = TextDim)
+            Spacer(Modifier.weight(1f))
+            RoundButton(Icons.Rounded.PlayCircle, "播放") { vm.resumeLast() }
+            Spacer(Modifier.width(8.dp))
+            RoundButton(Icons.Rounded.Settings, "配置", onClick = onOpenConfig)
+            Spacer(Modifier.width(8.dp))
+            Box {
+                RoundButton(Icons.Rounded.MoreVert, "更多") { menu = true }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("按序号排序") },
+                        onClick = {
+                            vm.updateSettings { it.copy(channelOrder = "index") }
+                            menu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("按名称排序") },
+                        onClick = {
+                            vm.updateSettings { it.copy(channelOrder = "name") }
+                            menu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("刷新全部配置") },
+                        onClick = {
+                            vm.refresh()
+                            menu = false
+                        }
+                    )
+                }
             }
+        }
+
+        Column(Modifier.padding(horizontal = 18.dp)) {
+            Text(
+                text = if (favoritesOnly) "我的收藏" else (activePlaylist?.name ?: state.playlists.firstOrNull()?.name ?: "IPTV"),
+                color = TextMain,
+                fontSize = if (isTv) 30.sp else 27.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (favoritesOnly) "${state.favorites.size} 个收藏" else "共 ${state.channels.size} 个频道",
+                color = TextDim,
+                fontSize = 11.sp
+            )
         }
 
         OutlinedTextField(
             value = state.query,
             onValueChange = { vm.setQuery(it) },
-            placeholder = { Text("搜索频道") },
+            placeholder = { Text("搜索") },
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = TextDim) },
             singleLine = true,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(22.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 6.dp)
+                .padding(horizontal = 18.dp, vertical = 8.dp)
         )
 
         if (!favoritesOnly) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(top = 6.dp, bottom = 4.dp)
+                modifier = Modifier.padding(bottom = 4.dp)
             ) {
                 items(vm.groups()) { group ->
                     FilterChip(
@@ -297,7 +387,7 @@ private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: B
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (favoritesOnly) "还没有收藏，点频道名右侧的星标收藏" else "这里还没有频道",
+                    text = if (favoritesOnly) "长按频道可收藏" else "这里还没有频道",
                     color = TextDim,
                     fontSize = 14.sp
                 )
@@ -316,13 +406,15 @@ private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: B
                         channel = channel,
                         index = index,
                         favourite = channel.id in state.favorites,
-                        subtitle = vm.programmeLine(channel),
+                        settings = settings,
                         isTv = isTv,
-                        modifier = if (index == 0) {
-                            Modifier.focusRequester(firstFocus)
-                        } else {
-                            Modifier
+                        latencyMs = state.latency[channel.id],
+                        infoLine = when {
+                            state.current?.id == channel.id && settings.showResolution && state.videoInfo != null ->
+                                state.videoInfo
+                            else -> vm.programmeLine(channel) ?: "无节目单"
                         },
+                        modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
                         onClick = { vm.play(channel) },
                         onToggleFavourite = { vm.toggleFavorite(channel) }
                     )
@@ -333,12 +425,44 @@ private fun ChannelListScreen(vm: AppViewModel, state: UiState, favoritesOnly: B
 }
 
 @Composable
+private fun Pill(icon: ImageVector, text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .background(PanelAlt, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = TextMain, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(text, color = TextMain, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun RoundButton(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(PanelAlt)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = label, tint = TextMain, modifier = Modifier.size(20.dp))
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun ChannelCard(
     channel: Channel,
     index: Int,
     favourite: Boolean,
-    subtitle: String?,
+    settings: AppSettings,
     isTv: Boolean,
+    latencyMs: Long?,
+    infoLine: String,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onToggleFavourite: () -> Unit
@@ -348,7 +472,10 @@ private fun ChannelCard(
     Column(
         modifier = modifier
             .onFocusChanged { focused = it.isFocused }
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onToggleFavourite
+            )
     ) {
         Box(
             modifier = Modifier
@@ -360,54 +487,74 @@ private fun ChannelCard(
                     if (focused) Modifier.border(2.dp, Accent, RoundedCornerShape(10.dp)) else Modifier
                 )
         ) {
-            ChannelLogo(
-                url = channel.logoUrl,
-                fallback = channel.name,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .size(if (isTv) 76.dp else 52.dp),
-                fallbackSize = if (isTv) 30 else 22
-            )
-
-            Text(
-                text = "%03d".format(index + 1),
-                color = Color(0xE6FFFFFF),
-                fontSize = 11.sp,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(8.dp)
-                    .background(Color(0xB3000000), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
-            )
-
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .background(Color(0xB3000000), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    Modifier
-                        .size(5.dp)
-                        .background(LiveDot, CircleShape)
+            if (settings.showLogo) {
+                ChannelLogo(
+                    url = channel.logoUrl,
+                    fallback = channel.name,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(if (isTv) 76.dp else 52.dp),
+                    fallbackSize = if (isTv) 30 else 22
                 )
-                Spacer(Modifier.width(4.dp))
-                Text("直播", color = LiveDot, fontSize = 10.sp)
+            } else {
+                Text(
+                    channel.name,
+                    color = TextMain,
+                    fontSize = 14.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 12.dp)
+                )
             }
 
-            Text(
-                text = channel.displayGroup,
-                color = Color(0xFFB8B8BE),
-                fontSize = 10.sp,
-                maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(8.dp)
-                    .background(Color(0x99101010), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+            if (settings.showIndex) {
+                Text(
+                    text = "%03d".format(index + 1),
+                    color = Color(0xE6FFFFFF),
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .background(Color(0xB3000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+
+            if (settings.showDelay) {
+                val tint = when {
+                    latencyMs == null -> Color(0x99FFFFFF)
+                    latencyMs < 500 -> LiveDot
+                    latencyMs < 1200 -> Color(0xFFFFC53D)
+                    else -> Accent
+                }
+                Text(
+                    text = latencyMs?.let { "$it ms" } ?: "— ms",
+                    color = tint,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(Color(0xB3000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+
+            if (settings.showGroup) {
+                Text(
+                    text = channel.displayGroup,
+                    color = Color(0xFFB8B8BE),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                        .background(Color(0x99101010), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -430,7 +577,7 @@ private fun ChannelCard(
             )
         }
         Text(
-            text = subtitle ?: "无节目单",
+            text = infoLine,
             color = TextDim,
             fontSize = if (isTv) 12.sp else 11.sp,
             maxLines = 1,
@@ -439,152 +586,564 @@ private fun ChannelCard(
     }
 }
 
-// MARK: - 配置
+// MARK: - 配置页
 
 @Composable
 private fun ConfigScreen(vm: AppViewModel, state: UiState, onDone: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
+    var showAdd by remember { mutableStateOf(state.playlists.isEmpty()) }
     var m3uInput by remember { mutableStateOf("") }
     var m3uName by remember { mutableStateOf("") }
     var xtreamBase by remember { mutableStateOf("") }
     var xtreamUser by remember { mutableStateOf("") }
     var xtreamPass by remember { mutableStateOf("") }
 
+    val configs = state.playlists.filter {
+        query.isBlank() || it.name.contains(query.trim(), ignoreCase = true) || it.sourceUrl.contains(query.trim())
+    }
+    val broken = state.playlists.count { it.error != null }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 14.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.weight(1f)) {
-                Text("配置中心", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "共 ${state.playlists.size} 个配置",
-                    color = TextDim,
-                    fontSize = 12.sp
-                )
+            Spacer(Modifier.weight(1f))
+            RoundButton(Icons.Rounded.Refresh, "刷新全部") { vm.refresh() }
+            Spacer(Modifier.width(8.dp))
+            RoundButton(Icons.Rounded.Settings, "添加") { showAdd = !showAdd }
+        }
+
+        Column(Modifier.padding(horizontal = 18.dp)) {
+            Text("配置中心", color = TextMain, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("共 ${state.playlists.size} 项配置", color = TextDim, fontSize = 11.sp)
+                if (broken > 0) {
+                    Spacer(Modifier.width(8.dp))
+                    Text("已失效 $broken 项配置", color = Accent, fontSize = 11.sp)
+                }
             }
-            if (state.channels.isNotEmpty()) {
-                TextButton(onClick = onDone) { Text("去看频道", color = Accent) }
-            }
         }
 
-        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("搜索配置") },
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = TextDim) },
+            singleLine = true,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 8.dp)
+        )
 
-        TabRow(selectedTabIndex = tab, containerColor = Panel, contentColor = Accent) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("M3U 订阅") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Xtream") })
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        if (tab == 0) {
-            OutlinedTextField(
-                value = m3uInput,
-                onValueChange = { m3uInput = it },
-                label = { Text("订阅地址或 M3U 内容") },
-                placeholder = { Text("http://host:port/xxx.m3u") },
-                minLines = 3,
-                maxLines = 6,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = m3uName,
-                onValueChange = { m3uName = it },
-                label = { Text("名称（可空）") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else {
-            OutlinedTextField(
-                value = xtreamBase,
-                onValueChange = { xtreamBase = it },
-                label = { Text("服务器地址") },
-                placeholder = { Text("http://host:port") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = xtreamUser,
-                onValueChange = { xtreamUser = it },
-                label = { Text("用户名") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = xtreamPass,
-                onValueChange = { xtreamPass = it },
-                label = { Text("密码") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+        configs.forEachIndexed { index, playlist ->
+            ConfigCard(
+                playlist = playlist,
+                index = state.playlists.indexOfFirst { it.id == playlist.id } + 1,
+                onToggle = { vm.togglePlaylistEnabled(playlist.id) },
+                onDuplicate = { vm.duplicatePlaylist(playlist.id) },
+                onDelete = { vm.removePlaylist(playlist.id) }
             )
         }
 
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = {
-                if (tab == 0) vm.importM3U(m3uInput, m3uName)
-                else vm.importXtream(xtreamBase, xtreamUser, xtreamPass, null)
-            },
-            enabled = !state.importing,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(if (state.importing) "导入中…" else "导入")
+        if (state.playlists.isEmpty()) {
+            Text(
+                "还没有配置，添加一个 M3U 订阅或 Xtream 账号",
+                color = TextDim,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+            )
         }
 
-        state.importError?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = Danger, fontSize = 12.sp)
-        }
-        state.importNotice?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = LiveDot, fontSize = 12.sp)
-        }
-
-        Spacer(Modifier.height(18.dp))
-        if (state.playlists.isNotEmpty()) {
-            Text("已添加的配置", color = TextDim, fontSize = 12.sp)
-            Spacer(Modifier.height(6.dp))
-            state.playlists.forEach { playlist ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(playlist.name, color = TextMain, fontSize = 15.sp)
-                        Text(
-                            playlist.sourceUrl,
-                            color = TextDim,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    TextButton(onClick = { vm.removePlaylist(playlist.id) }) {
-                        Text("删除", color = Danger)
+        if (showAdd) {
+            Column(Modifier.padding(horizontal = 18.dp)) {
+                Spacer(Modifier.height(6.dp))
+                TabRow(selectedTabIndex = tab, containerColor = Panel, contentColor = Accent) {
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("M3U 订阅") })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Xtream") })
+                }
+                Spacer(Modifier.height(10.dp))
+                if (tab == 0) {
+                    OutlinedTextField(
+                        value = m3uInput,
+                        onValueChange = { m3uInput = it },
+                        label = { Text("订阅地址或 M3U 内容") },
+                        minLines = 2,
+                        maxLines = 5,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = m3uName,
+                        onValueChange = { m3uName = it },
+                        label = { Text("名称（可空）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = xtreamBase,
+                        onValueChange = { xtreamBase = it },
+                        label = { Text("服务器地址") },
+                        placeholder = { Text("http://host:port") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = xtreamUser,
+                        onValueChange = { xtreamUser = it },
+                        label = { Text("用户名") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = xtreamPass,
+                        onValueChange = { xtreamPass = it },
+                        label = { Text("密码") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        onClick = {
+                            if (tab == 0) vm.importM3U(m3uInput, m3uName)
+                            else vm.importXtream(xtreamBase, xtreamUser, xtreamPass, null)
+                        },
+                        enabled = !state.importing,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (state.importing) "导入中…" else "导入")
                     }
                 }
-                HorizontalDivider(color = Color(0xFF232326))
+                state.importError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = Danger, fontSize = 12.sp)
+                }
+                state.importNotice?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = LiveDot, fontSize = 12.sp)
+                }
+                if (state.channels.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = onDone) { Text("去看频道", color = Accent) }
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun ConfigCard(
+    playlist: Playlist,
+    index: Int,
+    onToggle: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val enabled = playlist.enabled
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 18.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelAlt)
+            .padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .background(if (enabled) Accent else Color(0xFF5A5A5F), CircleShape)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                playlist.name,
+                color = if (enabled) TextMain else TextDim,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Switch(checked = enabled, onCheckedChange = { onToggle() })
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("#$index", color = TextDim, fontSize = 11.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                playlist.kindLabel,
+                color = TextDim,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .background(Color(0xFF2A2A2E), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+            if (playlist.error != null) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "已失效",
+                    color = Color(0xFFFFB4B6),
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .background(Color(0xFF4A1F22), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("${playlist.channelCount} 个频道", color = TextDim, fontSize = 12.sp)
+            Spacer(Modifier.width(12.dp))
+            Text("${playlist.groupCount} 个分组", color = TextDim, fontSize = 12.sp)
+            Spacer(Modifier.weight(1f))
+            Text(relativeTime(playlist.lastRefresh), color = TextDim, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            playlist.sourceUrl,
+            color = Color(0xFF6E6E73),
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        playlist.error?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, color = Danger, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onDuplicate) {
+                Icon(Icons.Rounded.ContentCopy, contentDescription = null, tint = TextDim, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("复制", color = TextDim, fontSize = 12.sp)
+            }
+            TextButton(onClick = onDelete) {
+                Icon(Icons.Rounded.Delete, contentDescription = null, tint = Danger, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("删除", color = Danger, fontSize = 12.sp)
             }
         }
     }
 }
 
+// MARK: - 设置页
+
+@Composable
+private fun SettingsScreen(vm: AppViewModel, settings: AppSettings, state: UiState) {
+    val context = LocalContext.current
+    var cacheBytes by remember { mutableStateOf(vm.cacheSize()) }
+    var dialog by remember { mutableStateOf<String?>(null) }
+    var epgDraft by remember { mutableStateOf(settings.defaultEpgUrl) }
+    val networkType = remember { networkType(context) }
+    val version = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "1.0"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 10.dp)) {
+            Text("设置", color = TextMain, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+            Text("VoyageTV $version", color = TextDim, fontSize = 11.sp)
+        }
+
+        SettingsGroup("通用") {
+            SettingRow(Icons.Rounded.Language, "语言", value = "简体中文") { dialog = "language" }
+            SettingRow(Icons.Rounded.DarkMode, "个性化", value = "深色") { dialog = "theme" }
+            SettingRow(
+                Icons.Rounded.Storage,
+                "缓存",
+                value = formatBytes(cacheBytes)
+            ) {
+                vm.clearCache()
+                cacheBytes = vm.cacheSize()
+            }
+            SettingRow(
+                Icons.Rounded.List,
+                "标签栏",
+                value = tabName(settings.defaultTab)
+            ) { dialog = "tab" }
+            SettingRow(Icons.Rounded.Info, "关于 VoyageTV", value = version) { dialog = "about" }
+        }
+
+        SettingsGroup("视频") {
+            SettingSwitchRow(
+                Icons.Rounded.PlayCircle,
+                "允许后台播放",
+                settings.allowBackground
+            ) { checked -> vm.updateSettings { it.copy(allowBackground = checked) } }
+            SettingSwitchRow(
+                Icons.Rounded.SkipNext,
+                "出错自动下一台",
+                settings.autoNextOnError
+            ) { checked -> vm.updateSettings { it.copy(autoNextOnError = checked) } }
+            SettingRow(
+                Icons.Rounded.Crop,
+                "默认纵横比",
+                value = aspectName(settings.aspectRatio)
+            ) { dialog = "aspect" }
+        }
+
+        SettingsGroup("频道") {
+            SettingSwitchRow(Icons.Rounded.Speed, "显示延迟", settings.showDelay) {
+                vm.updateSettings { s -> s.copy(showDelay = it) }
+            }
+            SettingSwitchRow(Icons.Rounded.List, "显示序号", settings.showIndex) {
+                vm.updateSettings { s -> s.copy(showIndex = it) }
+            }
+            SettingSwitchRow(Icons.Rounded.Group, "显示分组", settings.showGroup) {
+                vm.updateSettings { s -> s.copy(showGroup = it) }
+            }
+            SettingSwitchRow(Icons.Rounded.Image, "显示台标", settings.showLogo) {
+                vm.updateSettings { s -> s.copy(showLogo = it) }
+            }
+            SettingSwitchRow(Icons.Rounded.Category, "显示分辨率和帧率", settings.showResolution) {
+                vm.updateSettings { s -> s.copy(showResolution = it) }
+            }
+        }
+
+        SettingsGroup("节目单") {
+            SettingSwitchRow(Icons.Rounded.DateRange, "自动加载 EPG", settings.autoEpg) {
+                vm.updateSettings { s -> s.copy(autoEpg = it) }
+            }
+            SettingRow(
+                Icons.Rounded.Link,
+                "默认 EPG",
+                value = settings.defaultEpgUrl
+            ) {
+                epgDraft = settings.defaultEpgUrl
+                dialog = "epg"
+            }
+        }
+
+        SettingsGroup("其他") {
+            SettingRow(Icons.Rounded.Refresh, "恢复所有设置", value = null) { dialog = "reset" }
+        }
+
+        Column(Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
+            Text("当前网络类型：$networkType", color = TextDim, fontSize = 11.sp)
+            Text(
+                "为保证检测结果准确，请关闭所有网络代理",
+                color = Accent,
+                fontSize = 11.sp
+            )
+            Text(
+                "已载入 ${state.channels.size} 个频道 / ${state.playlists.count { it.enabled }} 个启用配置",
+                color = TextDim,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+    }
+
+    when (dialog) {
+        "language", "theme" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text(if (dialog == "language") "语言" else "个性化") },
+            text = {
+                Text(
+                    if (dialog == "language") "目前只有简体中文一种界面语言。" else "界面固定深色，IPTV 播放器用浅色会看不清画面。",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = { TextButton(onClick = { dialog = null }) { Text("知道了") } }
+        )
+
+        "tab" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("默认标签栏") },
+            text = {
+                Column {
+                    listOf("频道", "收藏", "配置", "设置").forEachIndexed { index, name ->
+                        Text(
+                            text = name,
+                            color = if (settings.defaultTab == index) Accent else TextMain,
+                            fontSize = 15.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    vm.updateSettings { it.copy(defaultTab = index) }
+                                    dialog = null
+                                }
+                                .padding(vertical = 10.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { dialog = null }) { Text("关闭") } }
+        )
+
+        "aspect" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("默认纵横比") },
+            text = {
+                Column {
+                    listOf("fit" to "适应（保持比例，留黑边）", "fill" to "填充（拉满屏幕）", "zoom" to "拉伸（裁掉多余）")
+                        .forEach { (key, label) ->
+                            Text(
+                                text = label,
+                                color = if (settings.aspectRatio == key) Accent else TextMain,
+                                fontSize = 15.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        vm.updateSettings { it.copy(aspectRatio = key) }
+                                        dialog = null
+                                    }
+                                    .padding(vertical = 10.dp)
+                            )
+                        }
+                }
+            },
+            confirmButton = { TextButton(onClick = { dialog = null }) { Text("关闭") } }
+        )
+
+        "epg" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("默认 EPG 地址") },
+            text = {
+                OutlinedTextField(
+                    value = epgDraft,
+                    onValueChange = { epgDraft = it },
+                    singleLine = true,
+                    label = { Text("XMLTV 地址") }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.updateSettings { it.copy(defaultEpgUrl = epgDraft.trim()) }
+                    dialog = null
+                    vm.refresh()
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } }
+        )
+
+        "about" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("关于 VoyageTV") },
+            text = {
+                Text(
+                    "VoyageTV $version\n一个自用的 IPTV 播放器：M3U / Xtream 订阅、节目单、收藏、后台播放。",
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = { TextButton(onClick = { dialog = null }) { Text("知道了") } }
+        )
+
+        "reset" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("恢复所有设置") },
+            text = { Text("界面选项会回到默认值。订阅、收藏、最近观看不会被删掉。", fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.resetSettings()
+                    cacheBytes = vm.cacheSize()
+                    dialog = null
+                }) { Text("恢复") }
+            },
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("取消") } }
+        )
+    }
+}
+
+@Composable
+private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Text(
+        title,
+        color = TextDim,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 6.dp)
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PanelAlt)
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun SettingRow(
+    icon: ImageVector,
+    title: String,
+    value: String?,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(title, color = TextMain, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        if (value != null) {
+            Text(
+                value,
+                color = TextDim,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1.2f, fill = false)
+            )
+        }
+        if (onClick != null) {
+            Text("  ›", color = TextDim, fontSize = 14.sp)
+        }
+    }
+    HorizontalDivider(color = Divider, modifier = Modifier.padding(start = 46.dp))
+}
+
+@Composable
+private fun SettingSwitchRow(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(title, color = TextMain, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+    HorizontalDivider(color = Divider, modifier = Modifier.padding(start = 46.dp))
+}
+
 // MARK: - 播放页
 
 @Composable
-private fun PlayerScreen(vm: AppViewModel, state: UiState) {
+private fun PlayerScreen(vm: AppViewModel, state: UiState, settings: AppSettings) {
     val channel = state.current ?: return
     val activity = LocalContext.current.findActivity()
     val isTv = remember(activity) {
@@ -596,13 +1155,18 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val playFocus = remember { FocusRequester() }
 
+    val resizeMode = when (settings.aspectRatio) {
+        "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+        "zoom" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+    }
+
     fun applyFullscreen(on: Boolean) {
         fullscreen = on
         chromeVisible = true
         val act = activity ?: return
         val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
         if (on) {
-            // 电视本来就是横屏，别去改方向
             if (!isTv) {
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             }
@@ -636,7 +1200,6 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
         }
     }
 
-    // 节目进度条每秒推进一格
     LaunchedEffect(state.isPlaying, state.currentStart) {
         while (true) {
             nowMs = System.currentTimeMillis()
@@ -666,12 +1229,15 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             factory = { context ->
                 PlayerView(context).apply {
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    this.resizeMode = resizeMode
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                     player = vm.player()
                 }
             },
-            update = { it.player = vm.player() }
+            update = { view ->
+                view.player = vm.player()
+                view.resizeMode = resizeMode
+            }
         )
 
         if (state.isBuffering) {
@@ -680,15 +1246,12 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 顶部：返回 / 频道名 + 节目 / 收藏 / 全屏（APTV 的顶栏样式）
         if (showChrome) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(
-                        Brush.verticalGradient(
-                            listOf(Color(0xCC000000), Color(0x00000000))
-                        )
+                        Brush.verticalGradient(listOf(Color(0xCC000000), Color(0x00000000)))
                     )
                     .padding(horizontal = 6.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -706,7 +1269,11 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (isTv) "遥控器 ↑↓ 换台" else (state.currentProgramme ?: channel.displayGroup),
+                        text = when {
+                            settings.showResolution && state.videoInfo != null -> state.videoInfo
+                            isTv -> "遥控器 ↑↓ 换台"
+                            else -> state.currentProgramme ?: channel.displayGroup
+                        },
                         color = Color(0xB3FFFFFF),
                         fontSize = 11.sp,
                         maxLines = 1,
@@ -730,16 +1297,13 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
             }
         }
 
-        // 底部：节目进度 + 上一台/播放/下一台
         if (showChrome) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(
-                        Brush.verticalGradient(
-                            listOf(Color(0x00000000), Color(0xF2000000))
-                        )
+                        Brush.verticalGradient(listOf(Color(0x00000000), Color(0xF2000000)))
                     )
                     .padding(horizontal = 18.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -817,6 +1381,8 @@ private fun PlayerScreen(vm: AppViewModel, state: UiState) {
     }
 }
 
+// MARK: - 小工具
+
 private fun Context.findActivity(): Activity? {
     var context: Context = this
     while (context is ContextWrapper) {
@@ -824,4 +1390,40 @@ private fun Context.findActivity(): Activity? {
         context = context.baseContext
     }
     return null
+}
+
+private fun tabName(index: Int): String = listOf("频道", "收藏", "配置", "设置")
+    .getOrElse(index) { "频道" }
+
+private fun aspectName(key: String): String = when (key) {
+    "fill" -> "填充"
+    "zoom" -> "拉伸"
+    else -> "适应"
+}
+
+private fun relativeTime(millis: Long): String {
+    if (millis <= 0L) return "从未刷新"
+    val diff = System.currentTimeMillis() - millis
+    val minutes = diff / 60_000L
+    return when {
+        minutes < 1 -> "刚刚刷新"
+        minutes < 60 -> "刷新于 ${minutes} 分钟前"
+        minutes < 60 * 24 -> "刷新于 ${minutes / 60} 小时前"
+        else -> "刷新于 ${minutes / (60 * 24)} 天前"
+    }
+}
+
+private fun networkType(context: Context): String {
+    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return "未知"
+    val network = manager.activeNetwork ?: return "无网络"
+    val properties = manager.getLinkProperties(network) ?: return "未知"
+    val hasV4 = properties.linkAddresses.any { it.address is Inet4Address }
+    val hasV6 = properties.linkAddresses.any { it.address is Inet6Address }
+    return when {
+        hasV4 && hasV6 -> "IPv4 / IPv6"
+        hasV6 -> "IPv6"
+        hasV4 -> "IPv4"
+        else -> "未知"
+    }
 }

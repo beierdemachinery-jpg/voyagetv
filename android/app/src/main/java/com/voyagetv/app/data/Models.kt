@@ -20,8 +20,16 @@ data class Playlist(
     val sourceUrl: String,
     val epgUrl: String? = null,
     val xtreamUser: String? = null,
-    val xtreamPass: String? = null
-)
+    val xtreamPass: String? = null,
+    val enabled: Boolean = true,
+    val lastRefresh: Long = 0L,
+    val channelCount: Int = 0,
+    val groupCount: Int = 0,
+    val error: String? = null
+) {
+    /** 配置卡片上那行「#1 订阅配置」。 */
+    val kindLabel: String get() = if (kind == "xtream") "Xtream 配置" else "订阅配置"
+}
 
 /** 节目单里的一条节目。 */
 data class Programme(

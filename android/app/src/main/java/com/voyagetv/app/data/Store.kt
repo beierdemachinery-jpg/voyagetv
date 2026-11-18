@@ -22,7 +22,12 @@ class Store(context: Context) {
                     sourceUrl = obj.getString("sourceUrl"),
                     epgUrl = obj.optString("epgUrl").ifBlank { null },
                     xtreamUser = obj.optString("xtreamUser").ifBlank { null },
-                    xtreamPass = obj.optString("xtreamPass").ifBlank { null }
+                    xtreamPass = obj.optString("xtreamPass").ifBlank { null },
+                    enabled = obj.optBoolean("enabled", true),
+                    lastRefresh = obj.optLong("lastRefresh", 0L),
+                    channelCount = obj.optInt("channelCount", 0),
+                    groupCount = obj.optInt("groupCount", 0),
+                    error = obj.optString("error").ifBlank { null }
                 )
             }
         }.getOrDefault(emptyList())
@@ -40,6 +45,11 @@ class Store(context: Context) {
                     put("epgUrl", playlist.epgUrl ?: "")
                     put("xtreamUser", playlist.xtreamUser ?: "")
                     put("xtreamPass", playlist.xtreamPass ?: "")
+                    put("enabled", playlist.enabled)
+                    put("lastRefresh", playlist.lastRefresh)
+                    put("channelCount", playlist.channelCount)
+                    put("groupCount", playlist.groupCount)
+                    put("error", playlist.error ?: "")
                 }
             )
         }

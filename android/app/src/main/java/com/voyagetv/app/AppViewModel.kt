@@ -10,14 +10,17 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.voyagetv.app.data.AppSettings
 import com.voyagetv.app.data.Channel
 import com.voyagetv.app.data.EpgStore
 import com.voyagetv.app.data.Http
 import com.voyagetv.app.data.M3UParser
 import com.voyagetv.app.data.Playlist
 import com.voyagetv.app.data.Programme
+import com.voyagetv.app.data.SettingsStore
 import com.voyagetv.app.data.Store
 import com.voyagetv.app.data.Xtream
 import com.voyagetv.app.player.PlaybackService
@@ -30,6 +33,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -40,12 +45,15 @@ data class UiState(
     val favorites: Set<String> = emptySet(),
     val recents: List<Channel> = emptyList(),
     val selectedGroup: String = GROUP_ALL,
+    val selectedPlaylistId: String = "",
     val query: String = "",
     val importing: Boolean = false,
     val importError: String? = null,
     val importNotice: String? = null,
     val loadingChannels: Boolean = false,
     val hasEpg: Boolean = false,
+    val latency: Map<String, Long> = emptyMap(),
+    val videoInfo: String? = null,
     val current: Channel? = null,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
@@ -65,11 +73,16 @@ data class UiState(
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = Store(app)
+    private val settingsStore = SettingsStore(app)
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val _settings = MutableStateFlow(settingsStore.load())
+    val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+
     private var controller: MediaController? = null
     private var epg: Map<String, List<Programme>> = emptyMap()
+    private var lastChannel: Channel? = null
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -86,6 +99,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.update {
                 it.copy(playerError = describe(error), isPlaying = false, isBuffering = false)
             }
+            if (_settings.value.autoNextOnError) {
+                viewModelScope.launch {
+                    delay(1500)
+                    playNext()
+                }
+            }
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            val format = runCatching { controller?.videoFormat }.getOrNull()
+            val info = format
+                ?.takeIf { it.height > 0 && it.width > 0 }
+                ?.let { f ->
+                    val fps = f.frameRate.takeIf { rate -> rate > 0f }
+                        ?.let { rate -> " · ${rate.toInt()} fps" }
+                        .orEmpty()
+                    "${f.width}x${f.height}$fps"
+                }
+            _uiState.update { it.copy(videoInfo = info) }
         }
     }
 
@@ -219,22 +251,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             val collected = ArrayList<Channel>()
             var epgUrl: String? = null
-            var failure: String? = null
             var updated: List<Playlist> = playlists
+            val stats = HashMap<String, Triple<Int, Int, String?>>()
 
             for (playlist in playlists) {
+                if (!playlist.enabled) {
+                    stats[playlist.id] = Triple(playlist.channelCount, playlist.groupCount, playlist.error)
+                    continue
+                }
                 try {
-                    if (playlist.kind == "xtream") {
+                    val list = if (playlist.kind == "xtream") {
                         val base = Xtream.baseUrl(playlist.sourceUrl)
                         val user = playlist.xtreamUser.orEmpty()
                         val pass = playlist.xtreamPass.orEmpty()
                         val streams = withContext(Dispatchers.IO) { Xtream.fetchStreams(base, user, pass) }
                         val categories = withContext(Dispatchers.IO) { Xtream.fetchCategoryNames(base, user, pass) }
-                        collected.addAll(Xtream.toChannels(streams, categories, base, user, pass, playlist.id))
+                        Xtream.toChannels(streams, categories, base, user, pass, playlist.id)
                     } else {
                         val text = withContext(Dispatchers.IO) { Http.getText(playlist.sourceUrl) }
                         val parsed = M3UParser.parse(text, playlist.id)
-                        collected.addAll(parsed.channels)
                         if (parsed.epgUrl != null) {
                             if (epgUrl == null) epgUrl = parsed.epgUrl
                             if (playlist.epgUrl == null) {
@@ -243,25 +278,109 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                                 }
                             }
                         }
+                        parsed.channels
                     }
+                    collected.addAll(list)
+                    stats[playlist.id] = Triple(
+                        list.size,
+                        list.map { it.displayGroup }.distinct().size,
+                        null
+                    )
                 } catch (e: Exception) {
-                    failure = "${playlist.name}：${describeImport(e)}"
+                    stats[playlist.id] = Triple(playlist.channelCount, playlist.groupCount, describeImport(e))
                 }
             }
 
-            if (updated != playlists) store.savePlaylists(updated)
+            val now = System.currentTimeMillis()
+            updated = updated.map { playlist ->
+                val stat = stats[playlist.id]
+                if (stat == null) {
+                    playlist
+                } else {
+                    playlist.copy(
+                        channelCount = stat.first,
+                        groupCount = stat.second,
+                        error = stat.third,
+                        lastRefresh = if (stat.third == null) now else playlist.lastRefresh
+                    )
+                }
+            }
+            store.savePlaylists(updated)
 
             val deduped = collected.distinctBy { it.streamUrl }
+            val failures = updated.filter { it.enabled && it.error != null }
+                .map { "${it.name}：${it.error}" }
             _uiState.update {
                 it.copy(
                     channels = deduped,
                     playlists = updated,
                     loadingChannels = false,
-                    importError = failure
+                    importError = failures.firstOrNull()
                 )
+            }
+
+            if (epgUrl == null && _settings.value.autoEpg) {
+                epgUrl = updated.firstOrNull { it.enabled && it.epgUrl != null }?.epgUrl
+                    ?: _settings.value.defaultEpgUrl.takeIf { it.isNotBlank() }
             }
             epgUrl?.let { loadEpg(it, deduped) }
         }
+    }
+
+    // MARK: - 配置管理
+
+    fun selectPlaylist(id: String) {
+        _uiState.update { it.copy(selectedPlaylistId = id) }
+    }
+
+    fun togglePlaylistEnabled(id: String) {
+        val list = store.playlists().map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
+        store.savePlaylists(list)
+        _uiState.update { it.copy(playlists = list) }
+        refresh()
+    }
+
+    fun duplicatePlaylist(id: String) {
+        val source = store.playlists().firstOrNull { it.id == id } ?: return
+        val copy = source.copy(
+            id = "pl-" + System.currentTimeMillis(),
+            name = source.name + " 副本",
+            lastRefresh = 0L,
+            channelCount = 0,
+            groupCount = 0,
+            error = null
+        )
+        val list = store.playlists() + copy
+        store.savePlaylists(list)
+        _uiState.update { it.copy(playlists = list) }
+        refresh()
+    }
+
+    // MARK: - 设置
+
+    fun updateSettings(transform: (AppSettings) -> AppSettings) {
+        val next = transform(_settings.value)
+        settingsStore.save(next)
+        _settings.value = next
+    }
+
+    fun resetSettings() {
+        settingsStore.reset()
+        _settings.value = settingsStore.load()
+    }
+
+    fun cacheSize(): Long = settingsStore.cacheSize()
+
+    fun clearCache(): Long = settingsStore.clearCache()
+
+    /** 捏一下车轮上的播放键：接着上次那个台，或者从头挑一个。 */
+    fun resumeLast() {
+        val channel = lastChannel ?: visibleChannels().firstOrNull() ?: return
+        play(channel)
+    }
+
+    fun pauseForBackground() {
+        controller?.pause()
     }
 
     private fun loadEpg(url: String, channels: List<Channel>) {
@@ -280,8 +399,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // MARK: - 播放
 
     fun play(channel: Channel) {
-        _uiState.update { it.copy(current = channel, playerError = null) }
+        lastChannel = channel
+        _uiState.update { it.copy(current = channel, playerError = null, videoInfo = null) }
         store.pushRecent(channel)
+        probeLatency(channel)
 
         val mediaController = controller
         if (mediaController == null) {
@@ -408,9 +529,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             UiState.GROUP_ALL -> state.channels
             else -> state.channels.filter { it.displayGroup == state.selectedGroup }
         }
-        if (state.query.isBlank()) return base
+        val scoped = if (state.selectedPlaylistId.isBlank()) {
+            base
+        } else {
+            base.filter { it.playlistId == state.selectedPlaylistId }
+        }
+        if (state.query.isBlank()) return scoped
         val query = state.query.trim()
-        return base.filter { it.name.contains(query, ignoreCase = true) }
+        return scoped.filter { it.name.contains(query, ignoreCase = true) }
+    }
+
+    /** 量一下这个台的首页响应耗时，卡片上那个 ms 就是它。只测被打开过的台，不挨个去打源站。 */
+    private fun probeLatency(channel: Channel) {
+        viewModelScope.launch {
+            val ms = withContext(Dispatchers.IO) {
+                runCatching {
+                    val connection = (URL(channel.streamUrl).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                        setRequestProperty("User-Agent", "VoyageTV/1.0 (Android)")
+                    }
+                    val started = System.currentTimeMillis()
+                    connection.connect()
+                    val cost = System.currentTimeMillis() - started
+                    val code = connection.responseCode
+                    connection.disconnect()
+                    if (code in 200..399) cost else null
+                }.getOrNull()
+            }
+            if (ms != null) {
+                _uiState.update { it.copy(latency = it.latency + (channel.id to ms)) }
+            }
+        }
     }
 
     fun visibleChannels(): List<Channel> = visibleOf(_uiState.value)
