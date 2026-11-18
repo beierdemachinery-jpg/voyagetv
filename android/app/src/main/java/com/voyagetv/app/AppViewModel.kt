@@ -281,6 +281,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(current = channel, playerError = null) }
         store.pushRecent(channel)
 
+        val mediaController = controller
+        if (mediaController == null) {
+            connectPlayer()
+            _uiState.update {
+                it.copy(
+                    recents = store.recents(),
+                    playerError = "播放服务还在启动，稍等一下再点一次这个频道"
+                )
+            }
+            return
+        }
         val metadata = MediaMetadata.Builder()
             .setTitle(channel.name)
             .setArtist(channel.displayGroup)
