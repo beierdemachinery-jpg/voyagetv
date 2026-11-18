@@ -51,7 +51,9 @@ data class UiState(
     val isBuffering: Boolean = false,
     val playerError: String? = null,
     val currentProgramme: String? = null,
-    val nextProgramme: String? = null
+    val nextProgramme: String? = null,
+    val currentStart: Long = 0L,
+    val currentEnd: Long = 0L
 ) {
     companion object {
         const val GROUP_ALL = "全部"
@@ -389,7 +391,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 },
                 nextProgramme = next?.let { programme ->
                     "${format(programme.startMillis)}-${format(programme.endMillis)} · ${programme.title}"
-                }
+                },
+                currentStart = current?.startMillis ?: 0L,
+                currentEnd = current?.endMillis ?: 0L
             )
         }
     }
