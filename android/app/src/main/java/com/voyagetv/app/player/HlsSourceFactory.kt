@@ -8,7 +8,6 @@ import androidx.media3.exoplayer.drm.DrmSessionManagerProvider
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
-import com.google.common.collect.ImmutableSet
 
 /**
  * 明确按 HLS 处理，不靠 URL 后缀猜。
@@ -33,7 +32,7 @@ class HlsSourceFactory(
         return this
     }
 
-    override fun getSupportedTypes(): ImmutableSet<Int> = ImmutableSet.of(C.CONTENT_TYPE_HLS)
+    override fun getSupportedTypes(): IntArray = intArrayOf(C.CONTENT_TYPE_HLS)
 
     override fun createMediaSource(mediaItem: MediaItem): MediaSource {
         val uri: Uri = mediaItem.localConfiguration?.uri ?: Uri.EMPTY
