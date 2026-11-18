@@ -49,14 +49,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tail -c 6000 /tmp/build.log > /tmp/tail.log || echo "no build log" > /tmp/tail.log
-          {
-            echo "运行页：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            echo
-            echo '```'
-            cat /tmp/tail.log
-            echo '```'
-          } > /tmp/body.md
+          echo "运行页：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > /tmp/body.md
+          echo >> /tmp/body.md
+          echo '### 编译错误（e: 行）' >> /tmp/body.md
+          echo '```' >> /tmp/body.md
+          grep -E "^e: " /tmp/build.log | head -60 >> /tmp/body.md || echo "no e: lines" >> /tmp/body.md
+          echo '```' >> /tmp/body.md
+          echo >> /tmp/body.md
+          echo '### 末尾 40 行' >> /tmp/body.md
+          echo '```' >> /tmp/body.md
+          tail -40 /tmp/build.log >> /tmp/body.md || true
+          echo '```' >> /tmp/body.md
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "Android 编译失败 #${{ github.run_number }}" \
