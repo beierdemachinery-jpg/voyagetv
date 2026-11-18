@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -108,16 +110,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
-            val format = runCatching { controller?.videoFormat }.getOrNull()
-            val info = format
-                ?.takeIf { it.height > 0 && it.width > 0 }
-                ?.let { f ->
-                    val fps = f.frameRate.takeIf { rate -> rate > 0f }
-                        ?.let { rate -> " · ${rate.toInt()} fps" }
-                        .orEmpty()
-                    "${f.width}x${f.height}$fps"
-                }
-            _uiState.update { it.copy(videoInfo = info) }
+            _uiState.update { it.copy(videoInfo = videoInfoOf(tracks)) }
         }
     }
 
@@ -466,7 +459,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun closePlayer() {
         controller?.stop()
         _uiState.update {
-            it.copy(current = null, isPlaying = false, playerError = null, isBuffering = false)
+            it.copy(current = null, isPlaying = false, playerError = null, isBuffering = false, videoInfo = null)
         }
     }
 
@@ -585,6 +578,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun hostOf(raw: String): String? = runCatching {
         if (!raw.startsWith("http")) return null
         Uri.parse(raw).host
+    }.getOrNull()
+
+    /**
+     * 从轨道信息里读当前视频的宽高。media3 里这几个方法带着 UnstableApi 标记，
+     * 直接调用会把编译搞挂，所以用反射拿——拿不到就算了，界面上不显示。
+     */
+    private fun videoInfoOf(tracks: Tracks): String? = runCatching {
+        val groups = tracks.javaClass.getMethod("getGroups").invoke(tracks) as? Iterable<*> ?: return null
+        for (group in groups) {
+            if (group == null) continue
+            val type = runCatching { group.javaClass.getMethod("getType").invoke(group) as Int }.getOrNull()
+            if (type != C.TRACK_TYPE_VIDEO) continue
+            val length = runCatching { group.javaClass.getMethod("getLength").invoke(group) as Int }
+                .getOrNull() ?: 0
+            for (index in 0 until length) {
+                val format = runCatching {
+                    group.javaClass.getMethod("getTrackFormat", Integer.TYPE)
+                        .invoke(group, index) as? Format
+                }.getOrNull() ?: continue
+                if (format.width > 0 && format.height > 0 && format.frameRate > 0f) {
+                    return "${format.width}x${format.height} · ${format.frameRate.toInt()} fps"
+                }
+                if (format.width > 0 && format.height > 0) {
+                    return "${format.width}x${format.height}"
+                }
+            }
+        }
+        null
     }.getOrNull()
 
     private fun describeImport(error: Throwable): String = when (error) {
