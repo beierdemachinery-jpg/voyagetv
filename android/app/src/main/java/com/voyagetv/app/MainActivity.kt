@@ -26,6 +26,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 设置里关掉「允许后台播放」时，退到后台就暂停，别在口袋里偷偷跑流量。 */
+    override fun onStop() {
+        super.onStop()
+        if (!vm.settings.value.allowBackground) {
+            vm.pauseForBackground()
+        }
+    }
+
     /**
      * 电视遥控器：正在播放时，上键 = 上一台、下键 = 下一台。
      *
